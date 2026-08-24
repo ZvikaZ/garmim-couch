@@ -1,0 +1,22 @@
+# Secrets / tokens — never commit
+.env
+.env.*
+!.env.example
+
+# Garmin auth tokens (persisted locally)
+.garmin-tokens/
+tokens/
+*.token
+oauth1_token.json
+oauth2_token.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# uv virtualenv
+.venv/

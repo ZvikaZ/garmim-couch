@@ -1,0 +1,12 @@
+[project]
+name = "garmim-couch"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.14"
+dependencies = [
+    "garmin-mcp",
+    "pydantic>=2.12",
+]
+
+[tool.uv.sources]
+garmin-mcp = { git = "https://github.com/kgabryje/garmin-mcp" }

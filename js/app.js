@@ -1,5 +1,5 @@
 import {
-  distBearing, elevationAngle, dirVector, qmul, qaxis, qconj, qrot, cameraHeadingPitch,
+  curvatureDrop, distBearing, elevationAngle, dirVector, qmul, qaxis, qconj, qrot, cameraHeadingPitch,
   compassName, D2R, R2D,
 } from './geo.js';
 import { DEM, lineOfSight, computeSkyline } from './dem.js';
@@ -7,7 +7,7 @@ import { loadLandmarks, loadRoads, finalizeScores, KIND_HE } from './data.js';
 import { Orientation } from './orientation.js';
 import { REGIONS } from './regions.js';
 
-const VERSION = '0.11';
+const VERSION = '0.12';
 const $ = (id) => document.getElementById(id);
 const video = $('video');
 const canvas = $('overlay');
@@ -15,7 +15,7 @@ const ctx = canvas.getContext('2d');
 
 // ---------------- persisted settings ----------------
 const SETTINGS_KEY = 'ma-roim:settings:v1';
-const defaults = { fov: 66, density: 1, showHidden: false, showSkyline: true, showRoads: true, driveMode: true, headingOffset: 0, pitchOffset: 0 };
+const defaults = { fov: 66, density: 1, showHidden: false, showSkyline: true, showRoads: true, driveMode: true, autoAlign: true, headingOffset: 0, pitchOffset: 0 };
 function loadSettings() {
   try { return { ...defaults, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}') }; } catch { return { ...defaults }; }
 }
@@ -126,6 +126,7 @@ async function loadAll(force = false) {
 
 function onPosition(lat, lon, acc, gpsAlt, gpsHeading = null, speed = null) {
   updateDrive(gpsHeading, speed);
+  recallCalibration(lat, lon);
   const first = !state.obs;
   state.obs = { ...(state.obs || {}), lat, lon, acc, gpsAlt };
   state.status.gps = acc != null ? `GPS ±${Math.round(acc)} מ׳` : '';
@@ -319,6 +320,7 @@ function render() {
     ctx.globalAlpha = 1;
   }
   if (settings.showRoads) drawRoads(project, W, H, overlaps);
+  drawReticle(q, f, W, H, cx, cy);
   drawRivers(project, W, H, overlaps);
   updateHud(q);
 }
@@ -362,6 +364,65 @@ function drawRoads(project, W, H, overlaps) {
       ctx.fillText(c.r.ref, c.x, box.y + 15);
     }
   }
+}
+
+// ---------------- "what's in the middle?" ----------------
+let centerInfo = { t: 0, text: '' };
+function lookAt(q, f, W, H, cx, cy) {
+  // ray through the screen centre
+  const d = qrot(q, [(W / 2 - cx) / f, -(H / 2 - cy) / f, -1]);
+  const n = Math.hypot(d[0], d[1], d[2]);
+  const az = (Math.atan2(d[0], d[1]) + 2 * Math.PI) % (2 * Math.PI);
+  const el = Math.asin(d[2] / n);
+  const obs = state.obs;
+  // 1) a labelled place right in the middle (within ~1.5°)?
+  let bestP = null, bestA = 1.5 * D2R;
+  for (const p of state.pois) {
+    if (p.d == null || !p.visible || p.kind === 'region' || p.d / 1000 > p.score * 0.4 * state.zoom * settings.density * 2) continue;
+    const da = Math.hypot(wrapPi(p.brg - az) * Math.cos(el), p.angle - el);
+    if (da < bestA) { bestA = da; bestP = p; }
+  }
+  if (bestP) return `${bestP.name} · ${fmtKm(bestP.d)} ק״מ`;
+  if (!state.dem.ready) return '';
+  // 2) march the ray over the terrain
+  const cosLat = Math.cos(obs.lat * D2R);
+  const tanEl = Math.tan(el);
+  let s = 200, hit = null;
+  while (s < 75000) {
+    const la = obs.lat + Math.cos(az) * s / 111195, lo = obs.lon + Math.sin(az) * s / (111195 * cosLat);
+    const g = state.dem.elevation(la, lo);
+    if (!Number.isNaN(g) && g >= obs.h + s * tanEl - curvatureDrop(s)) { hit = { la, lo, s }; break; }
+    s += Math.max(30, s * 0.01);
+  }
+  if (!hit) return el > 0 ? 'שמיים' : '';
+  // nearest named place to the spot we hit
+  let near = null, nd = Infinity;
+  for (const p of state.pois) {
+    if (p.kind === 'region' || p.kind === 'road' || p.kind === 'junction') continue;
+    const dd = distBearing(hit.la, hit.lo, p.lat, p.lon).d;
+    if (dd < nd) { nd = dd; near = p; }
+  }
+  const where = near && nd < Math.max(1500, hit.s * 0.15) ? (nd < 400 ? near.name : `ליד ${near.name}`) : 'שטח פתוח';
+  return `${where} · ${fmtKm(hit.s)} ק״מ`;
+}
+
+function drawReticle(q, f, W, H, cx, cy) {
+  const now = performance.now();
+  if (now - centerInfo.t > 300) { centerInfo = { t: now, text: lookAt(q, f, W, H, cx, cy) }; }
+  const x = W / 2, y = H / 2;
+  ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(x - 14, y); ctx.lineTo(x - 5, y); ctx.moveTo(x + 5, y); ctx.lineTo(x + 14, y);
+  ctx.moveTo(x, y - 14); ctx.lineTo(x, y - 5); ctx.moveTo(x, y + 5); ctx.lineTo(x, y + 14);
+  ctx.stroke();
+  if (!centerInfo.text) return;
+  ctx.font = '700 14px system-ui, sans-serif';
+  const w = ctx.measureText(centerInfo.text).width + 18;
+  ctx.fillStyle = 'rgba(0,0,0,0.6)';
+  roundRect(ctx, x - w / 2, y + 22, w, 26, 13); ctx.fill();
+  ctx.fillStyle = '#ffffff';
+  ctx.fillText(centerInfo.text, x, y + 40);
 }
 
 /** River names: one label per river, on its nearest visible stretch. */
@@ -452,55 +513,126 @@ function detectHorizon(cw) {
 
 window.__detectHorizon = (cw) => detectHorizon(cw); // tests
 
-function autoAlign() {
-  const { W } = viewSize();
-  const say = (t) => { const h = $('calib-hint'); h.textContent = t; h.hidden = false; setTimeout(() => { h.hidden = true; }, 3500); };
-  if (!state.skyline || !orient.q) { say('אין עדיין קו רכס מחושב'); return; }
+/** Find the shift (px) that puts the computed ridge line onto the ridge in the camera image. */
+function computeAlign() {
+  const { W, H } = viewSize();
+  if (!state.skyline || !orient.q) return { error: 'אין עדיין קו רכס מחושב' };
   const cw = 160;
   const det = detectHorizon(cw);
-  if (!det) { say('אין תמונת מצלמה'); return; }
-  // Predicted ridge y for every screen column, over an extended range for shifting.
+  if (!det) return { error: 'אין תמונת מצלמה' };
   const q = currentQuat(), qi = qconj(q);
   const f = baseFocal() * state.zoom;
-  const { H } = viewSize();
   const cx = W / 2, cy = H / 2 + settings.pitchOffset * state.zoom;
   const ext = Math.round(W * 0.6);
   const pred = new Float32Array(W + 2 * ext).fill(NaN);
   const n = state.skyline.length;
   for (let i = 0; i < n * 4; i++) {
     const az = (i / 4) * state.skyStep * D2R;
-    const a = state.skyline[Math.floor(i / 4)] * (1 - (i % 4) / 4) + state.skyline[(Math.floor(i / 4) + 1) % n] * ((i % 4) / 4);
-    const d = qrot(qi, dirVector(az, a));
+    const a2 = state.skyline[Math.floor(i / 4)] * (1 - (i % 4) / 4) + state.skyline[(Math.floor(i / 4) + 1) % n] * ((i % 4) / 4);
+    const d = qrot(qi, dirVector(az, a2));
     if (-d[2] < 0.1) continue;
     const x = Math.round(cx + f * d[0] / -d[2]) + ext, y = cy - f * d[1] / -d[2];
     if (x >= 0 && x < pred.length && (Number.isNaN(pred[x]) || y < pred[x])) pred[x] = y;
   }
-  // fill small gaps
   for (let x = 1; x < pred.length; x++) if (Number.isNaN(pred[x]) && !Number.isNaN(pred[x - 1])) pred[x] = pred[x - 1];
   const step = W / cw;
-  const median = (a) => { const b = a.slice().sort((p, q2) => p - q2); return b[Math.floor(b.length / 2)]; };
-  let best = null;
-  for (let sx = -ext + 1; sx < ext; sx += 2) {
+  const median = (arr) => { const c = arr.slice().sort((p, q2) => p - q2); return c[Math.floor(c.length / 2)]; };
+  const evalShift = (sx) => {
     const res = [];
     for (let i = 0; i < cw; i++) {
       const y = det[i];
       if (Number.isNaN(y)) continue;
-      const xp = Math.round(i * step - sx) + ext;
-      const py = pred[xp];
+      const py = pred[Math.round(i * step - sx) + ext];
       if (py === undefined || Number.isNaN(py)) continue;
       res.push(y - py);
     }
-    if (res.length < cw * 0.4) continue;
+    if (res.length < cw * 0.4) return null;
     const sy = median(res);
-    const cost = median(res.map((r) => Math.abs(r - sy)));
-    if (!best || cost < best.cost) best = { sx, sy, cost, n: res.length };
+    return { sx, sy, cost: median(res.map((r) => Math.abs(r - sy))), n: res.length };
+  };
+  let best = null;
+  for (let sx = -ext + 1; sx < ext; sx += 2) {
+    const r = evalShift(sx);
+    if (r && (!best || r.cost < best.cost)) best = r;
   }
+  if (!best) return { error: 'לא זוהה קו רכס בתמונה' };
+  // A flat ridge says nothing about left/right: keep the heading if shifting barely helps.
+  const zero = evalShift(0);
+  best.horizontalReliable = !zero || zero.cost - best.cost > 1.5;
+  best.f = f; best.H = H;
   window.__lastAlign = best;
-  if (!best || best.cost > H * 0.04) { say('לא הצלחתי לזהות את קו הרכס בתמונה. נסה לכוון לנוף פתוח, או גרור ידנית.'); return; }
-  settings.headingOffset += best.sx / f;
-  settings.pitchOffset += best.sy / state.zoom;
+  return best;
+}
+
+function say(t, ms = 3500) {
+  const h = $('calib-hint');
+  h.textContent = t; h.hidden = false;
+  clearTimeout(say.t); say.t = setTimeout(() => { h.hidden = true; }, ms);
+}
+
+/** The 🎯 button. */
+function autoAlign() {
+  const r = computeAlign();
+  if (r.error) { say(r.error); return; }
+  if (r.cost > r.H * 0.04) { say('לא הצלחתי לזהות את קו הרכס בתמונה. נסה לכוון לנוף פתוח, או גרור ידנית.'); return; }
+  settings.headingOffset += r.sx / r.f;
+  settings.pitchOffset += r.sy / state.zoom;
   saveSettings();
-  say(`יושר: ${(best.sx / f * R2D).toFixed(1)}° אופקי, ${(Math.atan(best.sy / f) * R2D).toFixed(1)}° אנכי`);
+  rememberCalibration();
+  say(`יושר: ${(r.sx / r.f * R2D).toFixed(1)}° אופקי, ${(Math.atan(r.sy / r.f) * R2D).toFixed(1)}° אנכי`);
+  checkCompassHealth();
+}
+
+// Continuous version: every few seconds, nudge the calibration towards the detected ridge,
+// but only when the match is clearly good and the correction is modest.
+let lastInteraction = 0;
+function continuousAlignTick() {
+  if (!settings.autoAlign || state.mode !== 'live' || state.drive.active || gesture) return;
+  if (performance.now() - lastInteraction < 4000 || document.visibilityState !== 'visible') return;
+  const r = computeAlign();
+  if (r.error || r.cost > r.H * 0.02) return;
+  const dh = r.horizontalReliable ? r.sx / r.f : 0;
+  const dp = r.sy / state.zoom;
+  if (Math.abs(dh) > 6 * D2R || Math.abs(Math.atan(r.sy / r.f)) > 5 * D2R) return; // too big to trust silently
+  settings.headingOffset += 0.5 * dh;
+  settings.pitchOffset += 0.5 * dp;
+  state.alignedAt = performance.now();
+}
+setInterval(continuousAlignTick, 2500);
+
+// ---------------- calibration memory per place ----------------
+const CALIB_KEY = 'ma-roim:calib-by-place:v1';
+const placeKey = (lat, lon) => `${lat.toFixed(2)},${lon.toFixed(2)}`; // ~1 km cells
+function loadCalibMap() { try { return JSON.parse(localStorage.getItem(CALIB_KEY) || '{}'); } catch { return {}; } }
+function rememberCalibration() {
+  if (!state.obs) return;
+  const m = loadCalibMap();
+  m[placeKey(state.obs.lat, state.obs.lon)] = { h: settings.headingOffset, p: settings.pitchOffset, t: Date.now() };
+  const keys = Object.keys(m);
+  if (keys.length > 300) keys.sort((x, y) => m[x].t - m[y].t).slice(0, keys.length - 300).forEach((k) => delete m[k]);
+  try { localStorage.setItem(CALIB_KEY, JSON.stringify(m)); } catch { /* ignore */ }
+}
+let lastPlace = null;
+function recallCalibration(lat, lon) {
+  const k = placeKey(lat, lon);
+  if (k === lastPlace) return;
+  lastPlace = k;
+  const c = loadCalibMap()[k];
+  if (c && !state.drive.active) {
+    settings.headingOffset = c.h; settings.pitchOffset = c.p;
+    say('נטען כיול ששמרת במקום הזה');
+  }
+}
+
+// ---------------- compass health ----------------
+// The web gives no compass-accuracy value on Android, but a large correction is a strong hint.
+let compassWarned = false;
+function checkCompassHealth() {
+  if (compassWarned || state.drive.active) return;
+  if (Math.abs(wrapPi(settings.headingOffset)) > 15 * D2R) {
+    compassWarned = true;
+    say('המצפן סוטה בהרבה מעלות. כדאי לכייל אותו: לנפנף את הטלפון כמה פעמים בצורת 8 באוויר, הרחק ממתכת ומרכב.', 9000);
+  }
 }
 
 function roundRect(c, x, y, w, h, r) {
@@ -529,6 +661,7 @@ const pointers = new Map();
 let gesture = null;
 
 canvas.addEventListener('pointerdown', (e) => {
+  lastInteraction = performance.now();
   canvas.setPointerCapture(e.pointerId);
   pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
   if (pointers.size === 1) {
@@ -569,7 +702,7 @@ function endPointer(e) {
   pointers.delete(e.pointerId);
   if (gesture?.type === 'drag' && pointers.size === 0) {
     if (gesture.moved < 8) onTap(e.clientX, e.clientY);
-    else saveSettings();
+    else { saveSettings(); rememberCalibration(); checkCompassHealth(); }
   }
   if (pointers.size === 0) gesture = null;
   else if (pointers.size === 1) gesture = null; // finishing a pinch: don't turn the leftover finger into a drag
@@ -610,6 +743,33 @@ function showInfo(p) {
   $('info-map').href = `https://www.google.com/maps/search/?api=1&query=${p.lat},${p.lon}`;
   $('info').hidden = false;
   showDriveTime(p);
+  showWiki(p);
+}
+
+let wikiReq = 0;
+/** Short Wikipedia summary (Hebrew preferred) with a thumbnail. */
+async function showWiki(p) {
+  const box = $('info-extract'), img = $('info-img');
+  box.textContent = ''; img.hidden = true;
+  const my = ++wikiReq;
+  try {
+    let lang = null, title = null;
+    if (p.wikipedia) { [lang, ...title] = p.wikipedia.split(':'); title = title.join(':'); }
+    if (p.wikidata && lang !== 'he') {
+      const j = await (await fetch(`https://www.wikidata.org/w/api.php?action=wbgetentities&ids=${p.wikidata}&props=sitelinks&sitefilter=hewiki|enwiki&format=json&origin=*`)).json();
+      const sl = j.entities?.[p.wikidata]?.sitelinks || {};
+      if (sl.hewiki) { lang = 'he'; title = sl.hewiki.title; } else if (!title && sl.enwiki) { lang = 'en'; title = sl.enwiki.title; }
+    }
+    if (!title || my !== wikiReq) return;
+    const r = await (await fetch(`https://${lang}.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(title.replace(/ /g, '_'))}`)).json();
+    if (my !== wikiReq) return;
+    const text = r.extract || '';
+    box.textContent = text.length > 420 ? `${text.slice(0, 400).replace(/\s\S*$/, '')}…` : text;
+    box.dir = lang === 'he' ? 'rtl' : 'ltr';
+    const wiki = $('info-wiki');
+    wiki.href = r.content_urls?.mobile?.page || wiki.href; wiki.hidden = false;
+    if (r.thumbnail?.source) { img.src = r.thumbnail.source; img.hidden = false; }
+  } catch { /* offline or no article */ }
 }
 
 let driveReq = 0;
@@ -649,6 +809,8 @@ function bindSettings() {
   $('show-skyline').checked = settings.showSkyline;
   $('show-roads').checked = settings.showRoads;
   $('drive-mode').checked = settings.driveMode;
+  $('auto-align').checked = settings.autoAlign;
+  $('auto-align').onchange = (e) => { settings.autoAlign = e.target.checked; saveSettings(); };
   $('drive-mode').onchange = (e) => { settings.driveMode = e.target.checked; saveSettings(); };
   $('btn-align').onclick = autoAlign;
   $('show-roads').onchange = (e) => { settings.showRoads = e.target.checked; saveSettings(); };

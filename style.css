@@ -77,3 +77,6 @@ button.secondary { background: rgba(255,255,255,.12); color: var(--text); }
 .panel small { display: block; color: var(--muted); font-size: 12px; line-height: 1.5; margin-top: 4px; }
 .panel details { margin-top: 14px; }
 .panel summary { cursor: pointer; color: var(--muted); font-size: 14px; }
+#info-img { float: inline-start; max-width: 38%; max-height: 140px; border-radius: 10px; margin: 0 0 8px 12px; object-fit: cover; }
+#info-extract { font-size: 14px; color: var(--text); clear: none; }
+#info .primary { clear: both; }

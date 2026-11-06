@@ -8,6 +8,8 @@
   color-scheme: dark;
 }
 * { box-sizing: border-box; }
+/* the hidden attribute must win over display:flex etc. */
+[hidden] { display: none !important; }
 html, body {
   margin: 0; height: 100%; overflow: hidden;
   background: var(--bg); color: var(--text);

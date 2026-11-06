@@ -7,7 +7,7 @@ import { loadLandmarks, loadRoads, finalizeScores, KIND_HE } from './data.js';
 import { Orientation } from './orientation.js';
 import { REGIONS } from './regions.js';
 
-const VERSION = '0.7';
+const VERSION = '0.8';
 const $ = (id) => document.getElementById(id);
 const video = $('video');
 const canvas = $('overlay');

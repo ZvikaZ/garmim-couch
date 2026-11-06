@@ -112,8 +112,49 @@ function writeCache(v) {
   try { localStorage.setItem(CACHE_KEY, JSON.stringify(v)); } catch { /* quota / private mode */ }
 }
 
-/** Landmarks around (lat, lon). Uses the cached set if we haven't moved far. */
+// ---------- pre-built static file (data/landmarks.json, made by tools/build_landmarks.py) ----------
+// Same reach per kind as the live Overpass query.
+const REACH_KM = { city: 90, town: 90, village: 35, hamlet: 35, peak: 60, volcano: 60, water: 80, valley: 60 };
+let staticDoc = null;
+
+async function loadStatic() {
+  if (staticDoc) return staticDoc;
+  const res = await fetch('data/landmarks.json', { cache: 'no-cache' });
+  if (!res.ok) throw new Error(`static data: HTTP ${res.status}`);
+  staticDoc = await res.json();
+  return staticDoc;
+}
+
+function fromStatic(doc, lat, lon) {
+  const [s, w, n, e] = doc.region;
+  if (lat < s || lat > n || lon < w || lon > e) return null; // outside the pre-built region
+  const out = [];
+  for (const r of doc.pois) {
+    const reach = REACH_KM[r.k] ?? 35;
+    // cheap prefilter before the exact distance
+    if (Math.abs(r.la - lat) > reach / 111 + 0.01) continue;
+    if (distBearing(lat, lon, r.la, r.lo).d / 1000 > reach) continue;
+    const p = {
+      id: `${r.k}:${r.n}:${r.la}`, kind: r.k, name: r.n, nameLocal: r.nl ?? r.n,
+      lat: r.la, lon: r.lo, ele: r.e ?? null, pop: r.p ?? null,
+      wikidata: r.w ?? null, wikipedia: r.wp ?? null, areaKm2: r.a ?? null,
+    };
+    p.score = baseScore(p);
+    out.push(p);
+  }
+  return out;
+}
+
+/** Landmarks around (lat, lon): pre-built file first, then cache, then live Overpass. */
 export async function loadLandmarks(lat, lon, { force = false } = {}) {
+  if (!force) {
+    try {
+      const pois = fromStatic(await loadStatic(), lat, lon);
+      if (pois) return { pois, fromCache: false, source: 'static' };
+    } catch (e) {
+      console.warn('no static landmarks file, using Overpass', e);
+    }
+  }
   const cached = readCache();
   if (!force && cached) {
     const { d } = distBearing(lat, lon, cached.lat, cached.lon);

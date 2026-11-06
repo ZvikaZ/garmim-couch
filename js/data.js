@@ -50,7 +50,13 @@ export function baseScore(p) {
     case 'village': return 40 + (p.wikidata ? 5 : 0);
     case 'hamlet': return 15;
     case 'peak':
-    case 'volcano': return 10 + (p.ele ?? 0) / 25 + (p.wikidata ? 40 : 0) + (p.kind === 'volcano' ? 10 : 0);
+    case 'volcano': {
+      // A sub-summit right next to a higher one is not interesting: scale by "isolation"
+      // (distance to the nearest higher peak), so the Hermon shows once, not ten times.
+      const iso = p.isoKm ?? 8;
+      const f = Math.max(0.15, Math.min(1.6, Math.sqrt(iso / 8)));
+      return (10 + (p.ele ?? 0) / 30 + (p.wikidata ? 25 : 0) + (p.kind === 'volcano' ? 10 : 0)) * f;
+    }
     case 'water':
     case 'valley': return 40 + 45 * Math.log10((p.areaKm2 ?? 0) + 1);
     default: return 10;
@@ -188,3 +194,24 @@ export const KIND_HE = {
   city: 'עיר', town: 'עיירה', village: 'יישוב', hamlet: 'יישוב קטן',
   peak: 'פסגה', volcano: 'הר געש', water: 'מקווה מים', valley: 'עמק',
 };
+
+/** Distance (km) from each peak to the nearest higher peak; then re-score everything. */
+export function finalizeScores(pois) {
+  const peaks = pois.filter((p) => (p.kind === 'peak' || p.kind === 'volcano') && p.ele != null)
+    .sort((a, b) => b.ele - a.ele);
+  for (let i = 0; i < peaks.length; i++) {
+    let best = 30;
+    for (let j = 0; j < i; j++) {
+      if (peaks[j].ele <= peaks[i].ele) continue;
+      if (Math.abs(peaks[j].lat - peaks[i].lat) > best / 111) continue;
+      const d = distBearing(peaks[i].lat, peaks[i].lon, peaks[j].lat, peaks[j].lon).d / 1000;
+      if (d < best) best = d;
+    }
+    peaks[i].isoKm = best;
+  }
+  for (const p of pois) {
+    if ((p.kind === 'peak' || p.kind === 'volcano') && p.ele == null) p.isoKm = 1;
+    p.score = baseScore(p);
+  }
+  return pois;
+}

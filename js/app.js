@@ -3,7 +3,7 @@ import {
   compassName, D2R, R2D,
 } from './geo.js';
 import { DEM, lineOfSight, computeSkyline } from './dem.js';
-import { loadLandmarks, KIND_HE } from './data.js';
+import { loadLandmarks, finalizeScores, KIND_HE } from './data.js';
 import { Orientation } from './orientation.js';
 
 const $ = (id) => document.getElementById(id);
@@ -96,7 +96,7 @@ async function loadAll(force = false) {
     .catch(() => { state.status.dem = 'אין נתוני גובה'; });
   const dataP = loadLandmarks(lat, lon, { force })
     .then((r) => {
-      state.pois = r.pois.map((p) => ({ ...p }));
+      state.pois = finalizeScores(r.pois.map((p) => ({ ...p })));
       state.status.data = r.stale ? 'נתונים ישנים (אין רשת)' : '';
     })
     .catch((e) => { state.status.data = 'שגיאה בטעינת מקומות'; state.lastError = String(e.message || e); console.error(e); });
@@ -208,7 +208,7 @@ function render() {
     cands.push({ p, x: pt[0], y: pt[1], rank: p.score / (1 + p.d / 30000) + (p.visible ? 0 : -1000) });
   }
   cands.sort((a, b) => b.rank - a.rank);
-  const maxLabels = Math.round(22 * settings.density * Math.sqrt(state.zoom));
+  const maxLabels = Math.round(12 * settings.density * Math.sqrt(state.zoom));
 
   const ROW0 = 52, ROW_H = 40, LABEL_H = 34, MAX_ROWS = 8;
   const overlaps = (b) => state.placed.some((o) => b.x < o.x + o.w + 6 && b.x + b.w + 6 > o.x && b.y < o.y + o.h + 2 && b.y + b.h + 2 > o.y);
@@ -225,13 +225,13 @@ function render() {
     const w = Math.max(w1, ctx.measureText(sub).width) + 14;
     let box = null;
     for (let r = 0; r < MAX_ROWS; r++) {
-      const b = { x: c.x - w / 2, y: ROW0 + r * ROW_H, w, h: LABEL_H };
+      const b = { x: Math.max(4, Math.min(W - w - 4, c.x - w / 2)), y: ROW0 + r * ROW_H, w, h: LABEL_H };
       if (b.y + b.h > c.y - 10) break;
       if (!overlaps(b)) { box = b; break; }
     }
     if (!box) {
       // Point is near the top of the screen (looking up at something close): label below it.
-      const b = { x: c.x - w / 2, y: c.y + 10, w, h: LABEL_H };
+      const b = { x: Math.max(4, Math.min(W - w - 4, c.x - w / 2)), y: c.y + 10, w, h: LABEL_H };
       if (b.y + b.h < H - 70 && !overlaps(b)) box = b;
     }
     if (!box) continue;
@@ -254,10 +254,10 @@ function render() {
     roundRect(ctx, box.x, box.y, box.w, box.h, 8); ctx.fill();
     ctx.fillStyle = st.color;
     ctx.font = `${st.weight} ${st.size}px system-ui, sans-serif`;
-    ctx.fillText(c.p.name, c.x, box.y + 4 + st.size * 0.85);
+    ctx.fillText(c.p.name, box.x + box.w / 2, box.y + 4 + st.size * 0.85);
     ctx.fillStyle = '#d6dbe4';
     ctx.font = '500 11px system-ui, sans-serif';
-    ctx.fillText(sub, c.x, box.y + box.h - 4);
+    ctx.fillText(sub, box.x + box.w / 2, box.y + box.h - 4);
     ctx.globalAlpha = 1;
   }
   updateHud(q);

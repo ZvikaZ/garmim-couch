@@ -58,7 +58,10 @@ export function baseScore(p) {
       return (10 + (p.ele ?? 0) / 30 + (p.wikidata ? 25 : 0) + (p.kind === 'volcano' ? 10 : 0)) * f;
     }
     case 'water':
-    case 'valley': return 40 + 45 * Math.log10((p.areaKm2 ?? 0) + 1);
+    case 'valley':
+      // Tiny named ponds/fish pools are noise (some even carry a big lake's name by mistake).
+      if (p.areaKm2 != null && p.areaKm2 < 0.1) return 5;
+      return 40 + 45 * Math.log10((p.areaKm2 ?? 0) + 1);
     default: return 10;
   }
 }

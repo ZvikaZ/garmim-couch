@@ -6,7 +6,7 @@ import { DEM, lineOfSight, computeSkyline } from './dem.js';
 import { loadLandmarks, finalizeScores, KIND_HE } from './data.js';
 import { Orientation } from './orientation.js';
 
-const VERSION = '0.4';
+const VERSION = '0.5';
 const $ = (id) => document.getElementById(id);
 const video = $('video');
 const canvas = $('overlay');

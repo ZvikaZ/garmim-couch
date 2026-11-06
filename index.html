@@ -14,7 +14,7 @@
   <canvas id="overlay"></canvas>
 
   <div id="hud" hidden>
-    <div id="heading">—</div>
+    <div><span id="heading">—</span> <span id="calib-badge"></span></div>
     <div id="status"></div>
   </div>
 
@@ -75,6 +75,8 @@
       <p id="debug" class="credit"></p>
     </details>
 
+    <button id="btn-capture" class="secondary">📸 שמור לבדיקה (כשהכיול טועה)</button>
+    <small>שומר את תמונת המצלמה ואת נתוני החיישנים, ופותח שיתוף. שלח את התמונה ל-Claude.</small>
     <button id="btn-help" class="secondary">הסבר ועזרה</button>
     <button id="btn-close-settings" class="primary">סגור</button>
   </section>

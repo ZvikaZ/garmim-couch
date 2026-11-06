@@ -80,3 +80,8 @@ button.secondary { background: rgba(255,255,255,.12); color: var(--text); }
 #info-img { float: inline-start; max-width: 38%; max-height: 140px; border-radius: 10px; margin: 0 0 8px 12px; object-fit: cover; }
 #info-extract { font-size: 14px; color: var(--text); clear: none; }
 #info .primary { clear: both; }
+#calib-badge { font-size: 12px; font-weight: 700; padding: 1px 6px; border-radius: 8px; margin-inline-start: 6px; }
+#calib-badge:empty { display: none; }
+.calib-good { background: #1f8a4c; color: #fff; }
+.calib-fair { background: #b8860b; color: #fff; }
+.calib-bad { background: #b3261e; color: #fff; }

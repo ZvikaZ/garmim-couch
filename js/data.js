@@ -24,6 +24,8 @@ function buildQuery(lat, lon) {
   node["place"~"^(city|town)$"]["name"]${b(90000)};
   node["place"~"^(village|hamlet)$"]["name"]${b(35000)};
   node["natural"~"^(peak|volcano)$"]["name"]${b(60000)};
+  node["tourism"="viewpoint"]["name"]${b(15000)};
+  nwr["historic"~"^(castle|fort|archaeological_site|ruins)$"]["name"]["wikidata"]${b(30000)};
   way["natural"="water"]["name"]["wikidata"]${b(80000)};
   relation["natural"="water"]["name"]["wikidata"]${b(80000)};
   way["natural"="valley"]["name"]["wikidata"]${b(60000)};
@@ -62,6 +64,12 @@ export function baseScore(p) {
       // Tiny named ponds/fish pools are noise (some even carry a big lake's name by mistake).
       if (p.areaKm2 != null && p.areaKm2 < 0.1) return 5;
       return 40 + 45 * Math.log10((p.areaKm2 ?? 0) + 1);
+    case 'castle':
+    case 'fort': return 50 + (p.wikidata ? 10 : 0);
+    case 'archaeological_site': return 25 + (p.wikidata ? 10 : 0);
+    case 'ruins': return 18;
+    case 'viewpoint': return 22;
+    case 'region': return 130;
     default: return 10;
   }
 }
@@ -78,7 +86,7 @@ function normalize(el) {
     areaKm2 = h * w * 0.6; // a lake fills roughly 60% of its bounding box
   }
   if (lat == null) return null;
-  const kind = t.place || t.natural;
+  const kind = t.place || t.natural || (t.tourism === 'viewpoint' ? 'viewpoint' : null) || t.historic;
   const p = {
     id: `${el.type[0]}${el.id}`,
     kind,
@@ -123,7 +131,8 @@ function writeCache(v) {
 
 // ---------- pre-built static file (data/landmarks.json, made by tools/build_landmarks.py) ----------
 // Same reach per kind as the live Overpass query.
-const REACH_KM = { city: 90, town: 90, village: 35, hamlet: 35, peak: 60, volcano: 60, water: 80, valley: 60 };
+const REACH_KM = { city: 90, town: 90, village: 35, hamlet: 35, peak: 60, volcano: 60, water: 80, valley: 60,
+  viewpoint: 15, castle: 30, fort: 30, archaeological_site: 30, ruins: 30 };
 let staticDoc = null;
 
 async function loadStatic() {
@@ -195,7 +204,8 @@ export async function loadLandmarks(lat, lon, { force = false } = {}) {
 
 export const KIND_HE = {
   city: 'עיר', town: 'עיירה', village: 'יישוב', hamlet: 'יישוב קטן',
-  peak: 'פסגה', volcano: 'הר געש', water: 'מקווה מים', valley: 'עמק', road: 'כביש',
+  peak: 'פסגה', volcano: 'הר געש', water: 'מקווה מים', valley: 'עמק', road: 'כביש', river: 'נחל',
+  viewpoint: 'מצפור', castle: 'מבצר', fort: 'מבצר', archaeological_site: 'אתר עתיקות', ruins: 'חורבה', region: 'אזור',
 };
 
 /** Distance (km) from each peak to the nearest higher peak; then re-score everything. */
@@ -223,21 +233,29 @@ export function finalizeScores(pois) {
 let roadsDoc = null;
 const ROAD_REACH_KM = 20;
 
-/** Points along numbered roads near (lat, lon): [{ ref, lat, lon }]. Empty if unavailable. */
+/** Points along numbered roads and named rivers near (lat, lon). */
 export async function loadRoads(lat, lon) {
   try {
     if (!roadsDoc) {
       const res = await fetch('data/roads.json', { cache: 'no-cache' });
-      if (!res.ok) return [];
+      if (!res.ok) return { roads: [], rivers: [] };
       roadsDoc = await res.json();
     }
-  } catch { return []; }
-  const out = [];
+  } catch { return { roads: [], rivers: [] }; }
   const dLat = ROAD_REACH_KM / 111;
-  for (const [ri, la, lo] of roadsDoc.pts) {
-    if (Math.abs(la - lat) > dLat) continue;
-    if (distBearing(lat, lon, la, lo).d / 1000 > ROAD_REACH_KM) continue;
-    out.push({ kind: 'road', ref: roadsDoc.refs[ri], name: `כביש ${roadsDoc.refs[ri]}`, lat: la, lon: lo });
-  }
-  return out;
+  const near = (pts, names, make) => {
+    const out = [];
+    for (const [i, la, lo] of pts || []) {
+      if (Math.abs(la - lat) > dLat) continue;
+      if (distBearing(lat, lon, la, lo).d / 1000 > ROAD_REACH_KM) continue;
+      out.push(make(names[i], la, lo));
+    }
+    return out;
+  };
+  return {
+    // 4-digit numbers are local access roads in Israel: noise for this purpose.
+    roads: near(roadsDoc.pts, roadsDoc.refs, (ref, la, lo) => ({ kind: 'road', ref, name: `כביש ${ref}`, lat: la, lon: lo }))
+      .filter((r) => !/^\d{4,}$/.test(r.ref)),
+    rivers: near(roadsDoc.rivers?.pts, roadsDoc.rivers?.names, (n, la, lo) => ({ kind: 'river', ref: n, name: n, lat: la, lon: lo })),
+  };
 }

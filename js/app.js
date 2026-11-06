@@ -5,8 +5,9 @@ import {
 import { DEM, lineOfSight, computeSkyline } from './dem.js';
 import { loadLandmarks, loadRoads, finalizeScores, KIND_HE } from './data.js';
 import { Orientation } from './orientation.js';
+import { REGIONS } from './regions.js';
 
-const VERSION = '0.6';
+const VERSION = '0.7';
 const $ = (id) => document.getElementById(id);
 const video = $('video');
 const canvas = $('overlay');
@@ -14,7 +15,7 @@ const ctx = canvas.getContext('2d');
 
 // ---------------- persisted settings ----------------
 const SETTINGS_KEY = 'ma-roim:settings:v1';
-const defaults = { fov: 66, density: 1, showHidden: false, showSkyline: true, showRoads: true, headingOffset: 0, pitchOffset: 0 };
+const defaults = { fov: 66, density: 1, showHidden: false, showSkyline: true, showRoads: true, driveMode: true, headingOffset: 0, pitchOffset: 0 };
 function loadSettings() {
   try { return { ...defaults, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}') }; } catch { return { ...defaults }; }
 }
@@ -31,6 +32,8 @@ const state = {
   lastDataAt: null,      // obs used for the last data/DEM load
   pois: [],
   roads: [],
+  rivers: [],
+  drive: { active: false, speed: 0, lastFix: 0 },
   skyline: null,
   skyStep: 0.5,
   zoom: 1,
@@ -42,13 +45,14 @@ const state = {
 window.__app = state; // handy for debugging / tests
 
 const orient = new Orientation();
+window.__orient = orient; // tests
 
 // ---------------- geometry ----------------
 function targetHeight(p) {
   const g = state.dem.elevation(p.lat, p.lon);
   if (p.kind === 'peak' || p.kind === 'volcano') return p.ele ?? (Number.isNaN(g) ? 0 : g);
   if (p.kind === 'water') return Number.isNaN(g) ? (p.ele ?? 0) : g;
-  if (p.kind === 'valley') return Number.isNaN(g) ? 0 : g;
+  if (p.kind === 'valley' || p.kind === 'region') return Number.isNaN(g) ? 0 : g;
   return (Number.isNaN(g) ? 0 : g) + 15; // settlements: aim a little above the ground (roofs)
 }
 
@@ -70,7 +74,9 @@ function recomputeGeometry() {
     p.d = d; p.brg = brg;
     p.h = targetHeight(p);
     p.angle = elevationAngle(p.h - obs.h, d);
-    if (haveDem && d > 300) {
+    if (p.kind === 'region') {
+      p.visible = true; // an area, not a point: "it's over there"
+    } else if (haveDem && d > 300) {
       const los = lineOfSight(state.dem, obs, p, p.h, d, brg);
       // Lakes and valleys are big: their centre can be hidden while most of it is visible.
       const lenient = (p.kind === 'water' || p.kind === 'valley') ? 0.02 : 0;
@@ -79,7 +85,7 @@ function recomputeGeometry() {
       p.visible = true;
     }
   }
-  for (const r of state.roads) {
+  for (const r of [...state.roads, ...state.rivers]) {
     const { d, brg } = distBearing(obs.lat, obs.lon, r.lat, r.lon);
     r.d = d; r.brg = brg;
     const g2 = state.dem.elevation(r.lat, r.lon);
@@ -106,17 +112,19 @@ async function loadAll(force = false) {
     .catch(() => { state.status.dem = 'אין נתוני גובה'; });
   const dataP = loadLandmarks(lat, lon, { force })
     .then((r) => {
-      state.pois = finalizeScores(r.pois.map((p) => ({ ...p })));
+      const regions = REGIONS.filter((g) => distBearing(lat, lon, g.lat, g.lon).d / 1000 <= g.reachKm).map((g) => ({ ...g }));
+      state.pois = finalizeScores([...r.pois.map((p) => ({ ...p })), ...regions]);
       state.status.data = r.stale ? 'נתונים ישנים (אין רשת)' : '';
     })
     .catch((e) => { state.status.data = 'שגיאה בטעינת מקומות'; state.lastError = String(e.message || e); console.error(e); });
-  const roadsP = loadRoads(lat, lon).then((r) => { state.roads = r; });
+  const roadsP = loadRoads(lat, lon).then((r) => { state.roads = r.roads; state.rivers = r.rivers; });
   // Show labels as soon as the landmarks arrive, then refine once heights are in.
   await Promise.all([dataP, roadsP]); recomputeGeometry();
   await demP; recomputeGeometry();
 }
 
-function onPosition(lat, lon, acc, gpsAlt) {
+function onPosition(lat, lon, acc, gpsAlt, gpsHeading = null, speed = null) {
+  updateDrive(gpsHeading, speed);
   const first = !state.obs;
   state.obs = { ...(state.obs || {}), lat, lon, acc, gpsAlt };
   state.status.gps = acc != null ? `GPS ±${Math.round(acc)} מ׳` : '';
@@ -125,6 +133,37 @@ function onPosition(lat, lon, acc, gpsAlt) {
   if (movedData > 8000) { loadAll(); return; }
   const movedGeom = state.lastGeomAt ? distBearing(lat, lon, state.lastGeomAt.lat, state.lastGeomAt.lon).d : Infinity;
   if (movedGeom > 250) recomputeGeometry();
+}
+
+// ---------------- drive mode ----------------
+// Inside a car the magnetometer is badly disturbed by the car's metal and electrics, and
+// acceleration tilts the gravity sensor. While driving, the GPS course is a far better
+// "north": when the camera looks roughly forward through the windscreen, we learn the offset
+// between the compass and the course and apply it.
+const DRIVE_SPEED = 4.5; // m/s (~16 km/h)
+const wrapPi = (a) => Math.atan2(Math.sin(a), Math.cos(a));
+
+function updateDrive(gpsHeading, speed) {
+  const dr = state.drive;
+  dr.speed = speed ?? 0;
+  const moving = settings.driveMode && speed != null && speed > DRIVE_SPEED && gpsHeading != null && !Number.isNaN(gpsHeading);
+  if (!moving) {
+    if (dr.active && performance.now() - dr.lastFix > 8000) dr.active = false;
+    orient.smoothing = dr.active ? 0.08 : 0.25;
+    return;
+  }
+  dr.lastFix = performance.now();
+  orient.smoothing = 0.08; // heavier smoothing against road bumps and acceleration
+  if (!orient.q || gesture) return;
+  const sensorHeading = cameraHeadingPitch(orient.q).heading;
+  const course = gpsHeading * D2R;
+  // Only learn when the camera faces (roughly) the direction of travel.
+  if (Math.abs(wrapPi(course - sensorHeading)) > 70 * D2R) return;
+  // corrected heading = sensor heading - offset  =>  offset = sensor - course
+  const target = wrapPi(sensorHeading - course);
+  const k = dr.active ? 0.3 : 1;
+  settings.headingOffset = wrapPi(settings.headingOffset + k * wrapPi(target - settings.headingOffset));
+  dr.active = true;
 }
 
 // ---------------- camera model ----------------
@@ -157,6 +196,12 @@ const KIND_STYLE = {
   volcano: { color: '#ffb36b', size: 15, weight: 700 },
   water: { color: '#5fd1ff', size: 15, weight: 700 },
   valley: { color: '#b8f28c', size: 15, weight: 700 },
+  region: { color: '#b8f28c', size: 16, weight: 800 },
+  viewpoint: { color: '#ffffff', size: 12, weight: 600 },
+  castle: { color: '#e9c8ff', size: 14, weight: 700 },
+  fort: { color: '#e9c8ff', size: 14, weight: 700 },
+  archaeological_site: { color: '#e9c8ff', size: 13, weight: 600 },
+  ruins: { color: '#e9c8ff', size: 12, weight: 500 },
 };
 
 function resize() {
@@ -211,7 +256,7 @@ function render() {
   const reach = 0.4 * state.zoom * settings.density; // km per score point
   const cands = [];
   for (const p of state.pois) {
-    if (p.d == null || p.d < 150) continue;
+    if (p.d == null || p.d < (p.kind === 'region' ? 4000 : 150)) continue;
     if (!p.visible && !settings.showHidden) continue;
     if (p.d / 1000 > p.score * reach) continue;
     const pt = project(dirVector(p.brg, p.angle));
@@ -272,6 +317,7 @@ function render() {
     ctx.globalAlpha = 1;
   }
   if (settings.showRoads) drawRoads(project, W, H, overlaps);
+  drawRivers(project, W, H, overlaps);
   updateHud(q);
 }
 
@@ -316,6 +362,37 @@ function drawRoads(project, W, H, overlaps) {
   }
 }
 
+/** River names: one label per river, on its nearest visible stretch. */
+function drawRivers(project, W, H, overlaps) {
+  const reachM = 8000 * state.zoom * settings.density;
+  const best = new Map();
+  for (const r of state.rivers) {
+    if (r.d == null || r.d < 200 || r.d > reachM || !r.visible) continue;
+    const cur = best.get(r.ref);
+    if (cur && cur.d <= r.d) continue;
+    best.set(r.ref, r);
+  }
+  const maxRivers = Math.round(3 * Math.sqrt(state.zoom) * settings.density);
+  let n = 0;
+  ctx.font = 'italic 600 13px system-ui, sans-serif';
+  for (const r of [...best.values()].sort((a, b) => a.d - b.d)) {
+    if (n >= maxRivers) break;
+    const pt = project(dirVector(r.brg, r.angle));
+    if (!pt || pt[0] < 20 || pt[0] > W - 20 || pt[1] < 60 || pt[1] > H - 80) continue;
+    const w = ctx.measureText(r.name).width + 10;
+    const box = { x: pt[0] - w / 2, y: pt[1] - 24, w, h: 20 };
+    if (overlaps(box)) continue;
+    box.p = r;
+    state.placed.push(box);
+    n++;
+    ctx.fillStyle = 'rgba(0,30,60,0.55)';
+    roundRect(ctx, box.x, box.y, box.w, box.h, 6); ctx.fill();
+    ctx.fillStyle = '#7fd8ff';
+    ctx.fillText(r.name, pt[0], box.y + 15);
+    ctx.beginPath(); ctx.arc(pt[0], pt[1], 2.5, 0, Math.PI * 2); ctx.fill();
+  }
+}
+
 /** Demo mode has no camera: paint the computed ridge line as a silhouette so it looks like a view. */
 function drawDemoTerrain(project, W, H) {
   const n = state.skyline.length;
@@ -337,6 +414,93 @@ function drawDemoTerrain(project, W, H) {
   ctx.fill();
 }
 
+// ---------------- auto-align ----------------
+// Find the sky/land boundary in the camera image and slide the computed ridge line onto it.
+function detectHorizon(cw) {
+  const { W, H } = viewSize();
+  const vw = video.videoWidth, vh = video.videoHeight;
+  if (!vw || !vh) return null;
+  const k = cw / W, ch = Math.round(H * k);
+  const c = document.createElement('canvas');
+  c.width = cw; c.height = ch;
+  const g = c.getContext('2d', { willReadFrequently: true });
+  const s = Math.max(W / vw, H / vh) * state.zoom;
+  const dw = vw * s, dh = vh * s;
+  g.drawImage(video, 0, 0, vw, vh, (W - dw) / 2 * k, (H - dh) / 2 * k, dw * k, dh * k);
+  const px = g.getImageData(0, 0, cw, ch).data;
+  // "skyness": sky (even hazy sky and clouds) is bluish-grey and bright; land is brown,
+  // green or dark. Distant hills are hazy but still warmer (r > b) than the sky above them.
+  const v = new Float32Array(cw * ch);
+  for (let i = 0; i < cw * ch; i++) {
+    const r = px[i * 4], gg = px[i * 4 + 1], b = px[i * 4 + 2];
+    v[i] = 2 * (b - r) + 0.3 * ((r + gg + b) / 3 - 150);
+  }
+  const ys = new Float32Array(cw).fill(NaN);
+  const y0 = Math.max(3, Math.round(ch * 0.08));
+  for (let x = 0; x < cw; x++) {
+    // first edge from the top where sky above turns into land below
+    for (let y = y0; y < ch - 3; y++) {
+      const above = (v[(y - 3) * cw + x] + v[(y - 2) * cw + x] + v[(y - 1) * cw + x]) / 3;
+      const below = (v[y * cw + x] + v[(y + 1) * cw + x] + v[(y + 2) * cw + x]) / 3;
+      if (above > 15 && below < -5) { ys[x] = y / k; break; }
+    }
+  }
+  return ys;
+}
+
+window.__detectHorizon = (cw) => detectHorizon(cw); // tests
+
+function autoAlign() {
+  const { W } = viewSize();
+  const say = (t) => { const h = $('calib-hint'); h.textContent = t; h.hidden = false; setTimeout(() => { h.hidden = true; }, 3500); };
+  if (!state.skyline || !orient.q) { say('אין עדיין קו רכס מחושב'); return; }
+  const cw = 160;
+  const det = detectHorizon(cw);
+  if (!det) { say('אין תמונת מצלמה'); return; }
+  // Predicted ridge y for every screen column, over an extended range for shifting.
+  const q = currentQuat(), qi = qconj(q);
+  const f = baseFocal() * state.zoom;
+  const { H } = viewSize();
+  const cx = W / 2, cy = H / 2 + settings.pitchOffset * state.zoom;
+  const ext = Math.round(W * 0.6);
+  const pred = new Float32Array(W + 2 * ext).fill(NaN);
+  const n = state.skyline.length;
+  for (let i = 0; i < n * 4; i++) {
+    const az = (i / 4) * state.skyStep * D2R;
+    const a = state.skyline[Math.floor(i / 4)] * (1 - (i % 4) / 4) + state.skyline[(Math.floor(i / 4) + 1) % n] * ((i % 4) / 4);
+    const d = qrot(qi, dirVector(az, a));
+    if (-d[2] < 0.1) continue;
+    const x = Math.round(cx + f * d[0] / -d[2]) + ext, y = cy - f * d[1] / -d[2];
+    if (x >= 0 && x < pred.length && (Number.isNaN(pred[x]) || y < pred[x])) pred[x] = y;
+  }
+  // fill small gaps
+  for (let x = 1; x < pred.length; x++) if (Number.isNaN(pred[x]) && !Number.isNaN(pred[x - 1])) pred[x] = pred[x - 1];
+  const step = W / cw;
+  const median = (a) => { const b = a.slice().sort((p, q2) => p - q2); return b[Math.floor(b.length / 2)]; };
+  let best = null;
+  for (let sx = -ext + 1; sx < ext; sx += 2) {
+    const res = [];
+    for (let i = 0; i < cw; i++) {
+      const y = det[i];
+      if (Number.isNaN(y)) continue;
+      const xp = Math.round(i * step - sx) + ext;
+      const py = pred[xp];
+      if (py === undefined || Number.isNaN(py)) continue;
+      res.push(y - py);
+    }
+    if (res.length < cw * 0.4) continue;
+    const sy = median(res);
+    const cost = median(res.map((r) => Math.abs(r - sy)));
+    if (!best || cost < best.cost) best = { sx, sy, cost, n: res.length };
+  }
+  window.__lastAlign = best;
+  if (!best || best.cost > H * 0.04) { say('לא הצלחתי לזהות את קו הרכס בתמונה. נסה לכוון לנוף פתוח, או גרור ידנית.'); return; }
+  settings.headingOffset += best.sx / f;
+  settings.pitchOffset += best.sy / state.zoom;
+  saveSettings();
+  say(`יושר: ${(best.sx / f * R2D).toFixed(1)}° אופקי, ${(Math.atan(best.sy / f) * R2D).toFixed(1)}° אנכי`);
+}
+
 function roundRect(c, x, y, w, h, r) {
   c.beginPath();
   c.moveTo(x + r, y); c.arcTo(x + w, y, x + w, y + h, r); c.arcTo(x + w, y + h, x, y + h, r);
@@ -353,7 +517,7 @@ function updateHud(q) {
     $('heading').textContent = state.obs ? 'ממתין לחיישני כיוון…' : 'ממתין למיקום…';
   }
   const s = state.status;
-  const parts = [s.gps, s.data || (state.pois.length ? `${state.pois.length} מקומות` : ''), s.dem].filter(Boolean);
+  const parts = [state.drive.active ? '🚗 כיוון לפי נסיעה' : '', s.gps, s.data || (state.pois.length ? `${state.pois.length} מקומות` : ''), s.dem].filter(Boolean);
   $('status').textContent = parts.join(' · ');
   $('zoom-label').textContent = state.zoom > 1.05 ? `×${state.zoom.toFixed(1)}` : '';
 }
@@ -443,6 +607,34 @@ function showInfo(p) {
   } else wiki.hidden = true;
   $('info-map').href = `https://www.google.com/maps/search/?api=1&query=${p.lat},${p.lon}`;
   $('info').hidden = false;
+  showDriveTime(p);
+}
+
+let driveReq = 0;
+/** Driving time from here (public OSRM demo router). Shown when it arrives; silently skipped on error. */
+async function showDriveTime(p) {
+  const el = $('info-drive');
+  el.textContent = '';
+  if (!state.obs || p.kind === 'region' || p.d < 500) return;
+  const my = ++driveReq;
+  el.textContent = '🚗 מחשב זמן נסיעה…';
+  try {
+    const url = `https://router.project-osrm.org/route/v1/driving/${state.obs.lon},${state.obs.lat};${p.lon},${p.lat}?overview=false`;
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 8000);
+    const res = await fetch(url, { signal: ctrl.signal });
+    clearTimeout(t);
+    const j = await res.json();
+    if (my !== driveReq) return;
+    const r = j.routes?.[0];
+    if (!r) { el.textContent = ''; return; }
+    const min = Math.round(r.duration / 60);
+    const dur = min < 60 ? `${min} דק׳` : `${Math.floor(min / 60)}:${String(min % 60).padStart(2, '0')} שע׳`;
+    // Snapping to the nearest road can land far away (e.g. a peak with no road).
+    el.textContent = `🚗 כ-${dur} נסיעה (${fmtKm(r.distance)} ק״מ בכביש)`;
+  } catch {
+    if (my === driveReq) el.textContent = '';
+  }
 }
 $('btn-close-info').onclick = () => { $('info').hidden = true; };
 
@@ -454,6 +646,9 @@ function bindSettings() {
   $('show-hidden').checked = settings.showHidden;
   $('show-skyline').checked = settings.showSkyline;
   $('show-roads').checked = settings.showRoads;
+  $('drive-mode').checked = settings.driveMode;
+  $('drive-mode').onchange = (e) => { settings.driveMode = e.target.checked; saveSettings(); };
+  $('btn-align').onclick = autoAlign;
   $('show-roads').onchange = (e) => { settings.showRoads = e.target.checked; saveSettings(); };
   fov.oninput = () => { settings.fov = +fov.value; $('fov-out').textContent = fov.value; saveSettings(); };
   dens.oninput = () => { settings.density = +dens.value; $('density-out').textContent = dens.value; saveSettings(); };
@@ -482,9 +677,18 @@ function showMain() {
   requestAnimationFrame(render);
 }
 
+let wakeLock = null;
+async function keepAwake() {
+  try { wakeLock = await navigator.wakeLock?.request('screen'); } catch { /* not allowed now */ }
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && state.mode === 'live') keepAwake();
+});
+
 async function startLive() {
   state.mode = 'live';
   showMain();
+  keepAwake();
   // Orientation must be requested inside the click handler on iOS: do it first.
   const orientP = orient.start();
   try {
@@ -501,7 +705,7 @@ async function startLive() {
   await orientP;
   if (!navigator.geolocation) { state.status.gps = 'אין GPS'; return; }
   navigator.geolocation.watchPosition(
-    (pos) => onPosition(pos.coords.latitude, pos.coords.longitude, pos.coords.accuracy, pos.coords.altitude),
+    (pos) => onPosition(pos.coords.latitude, pos.coords.longitude, pos.coords.accuracy, pos.coords.altitude, pos.coords.heading, pos.coords.speed),
     (err) => { state.status.gps = err.code === 1 ? 'אין הרשאת מיקום' : 'ממתין ל-GPS…'; },
     { enableHighAccuracy: true, maximumAge: 5000, timeout: 30000 },
   );

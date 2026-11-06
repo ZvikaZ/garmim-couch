@@ -21,6 +21,7 @@
   <div id="toolbar" hidden>
     <button id="btn-settings" aria-label="הגדרות">⚙</button>
     <button id="btn-calib" aria-label="איפוס כיול">⟲</button>
+    <button id="btn-align" aria-label="יישור אוטומטי">🎯</button>
     <div id="zoom-label"></div>
   </div>
 
@@ -34,7 +35,8 @@
       <li>צריך הרשאה למצלמה, למיקום ולחיישני התנועה.</li>
       <li>הקו הצהוב הוא קו הרכס המחושב. אם הוא לא יושב על הרכס האמיתי, גרור את המסך עד שהוא יושב. התיקון נשמר.</li>
       <li>צביטה עם שתי אצבעות: זום, ובזום מופיעים גם מקומות קטנים יותר.</li>
-      <li>לחיצה על תווית: פרטים נוספים.</li>
+      <li>🎯 מיישר אוטומטית את הקו הצהוב לרכס שבתמונה. ⟲ מאפס את הכיול.</li>
+      <li>לחיצה על תווית: פרטים וזמן נסיעה.</li>
     </ul>
     <p class="credit">נתונים: © OpenStreetMap contributors · גבהים: AWS Terrain Tiles (SRTM ועוד)</p>
   </section>
@@ -48,6 +50,9 @@
     </label>
 
     <label class="row"><input id="show-roads" type="checkbox"> מספרי כבישים</label>
+
+    <label class="row"><input id="drive-mode" type="checkbox"> מצב נסיעה אוטומטי</label>
+    <small>ברכב המצפן לא אמין. בנסיעה, כשהטלפון מכוון קדימה, הכיוון נלקח מכיוון הנסיעה ב-GPS.</small>
 
     <label class="row"><input id="show-skyline" type="checkbox"> קו רכס צהוב</label>
     <small>הקו הוא קו האופק כפי שהוא מחושב מהמפה הטופוגרפית. אם הוא יושב על הרכס האמיתי, הכיוון מכויל. אם לא, גרור את המסך עד שהוא יושב עליו.</small>
@@ -71,6 +76,7 @@
   <section id="info" class="panel" hidden>
     <h2 id="info-name"></h2>
     <p id="info-body"></p>
+    <p id="info-drive"></p>
     <p><a id="info-wiki" target="_blank" rel="noopener" hidden>ויקיפדיה</a>
        <a id="info-map" target="_blank" rel="noopener">פתח במפה</a></p>
     <button id="btn-close-info" class="primary">סגור</button>

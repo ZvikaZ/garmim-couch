@@ -30,6 +30,8 @@ def query():
 (
   node["place"~"^(city|town|village|hamlet)$"]["name"]{bb};
   node["natural"~"^(peak|volcano)$"]["name"]{bb};
+  node["tourism"="viewpoint"]["name"]{bb};
+  nwr["historic"~"^(castle|fort|archaeological_site|ruins)$"]["name"]["wikidata"]{bb};
   way["natural"="water"]["name"]["wikidata"]{bb};
   relation["natural"="water"]["name"]["wikidata"]{bb};
   way["natural"="valley"]["name"]["wikidata"]{bb};
@@ -84,7 +86,7 @@ def convert(raw):
         name = t.get("name:he") or t.get("name:en") or t.get("name")
         if not name:
             continue
-        kind = t.get("place") or t.get("natural")
+        kind = t.get("place") or t.get("natural") or ("viewpoint" if t.get("tourism") == "viewpoint" else None) or t.get("historic")
         lat, lon, area = el.get("lat"), el.get("lon"), None
         if lat is None and "bounds" in el:
             b = el["bounds"]
@@ -115,35 +117,56 @@ def convert(raw):
 def roads_query():
     s, w, n, e = REGION
     return f"""[out:json][timeout:300];
-way["highway"~"^(motorway|trunk|primary|secondary)$"]["ref"]({s},{w},{n},{e});
+(
+  way["highway"~"^(motorway|trunk|primary|secondary)$"]["ref"]({s},{w},{n},{e});
+  way["waterway"="river"]["name"]({s},{w},{n},{e});
+  way["waterway"="stream"]["name"]["wikidata"]({s},{w},{n},{e});
+);
 out tags geom qt;"""
 
 
 ROAD_STEP_KM = 0.6
 
 
+def resample(geom, step_km):
+    """Points every step_km along a polyline (starting half a step in)."""
+    out, carry = [], step_km / 2
+    for a, b in zip(geom, geom[1:]):
+        seg = dist_km(a["lat"], a["lon"], b["lat"], b["lon"])
+        pos = carry
+        while pos <= seg:
+            t = pos / seg if seg else 0
+            out.append((round(a["lat"] + (b["lat"] - a["lat"]) * t, 5), round(a["lon"] + (b["lon"] - a["lon"]) * t, 5)))
+            pos += step_km
+        carry = pos - seg
+    return out
+
+
 def convert_roads(raw):
-    """Resample every numbered road to a point every ~600 m: [refIndex, lat, lon]."""
-    refs, ref_idx, pts = [], {}, []
+    """Numbered roads and named rivers, resampled to points: [nameIndex, lat, lon]."""
+    roads = {"refs": [], "pts": []}
+    rivers = {"names": [], "pts": []}
+    idx = {}
     for el in raw.get("elements", []):
-        ref = (el.get("tags", {}).get("ref") or "").split(";")[0].strip()
+        t = el.get("tags", {})
         geom = el.get("geometry") or []
-        if not ref or len(geom) < 2:
+        if len(geom) < 2:
             continue
-        if ref not in ref_idx:
-            ref_idx[ref] = len(refs)
-            refs.append(ref)
-        ri = ref_idx[ref]
-        carry = ROAD_STEP_KM / 2  # distance to the next sample along the way
-        for a, b in zip(geom, geom[1:]):
-            seg = dist_km(a["lat"], a["lon"], b["lat"], b["lon"])
-            pos = carry
-            while pos <= seg:
-                t = pos / seg if seg else 0
-                pts.append([ri, round(a["lat"] + (b["lat"] - a["lat"]) * t, 5), round(a["lon"] + (b["lon"] - a["lon"]) * t, 5)])
-                pos += ROAD_STEP_KM
-            carry = pos - seg
-    return {"refs": refs, "pts": pts}
+        if "highway" in t:
+            label, bucket, key = (t.get("ref") or "").split(";")[0].strip(), roads, "refs"
+            if label.isdigit() and len(label) >= 4:
+                continue  # local access roads (4-digit numbers in Israel)
+        else:
+            label, bucket, key = t.get("name:he") or t.get("name"), rivers, "names"
+        if not label:
+            continue
+        k = (key, label)
+        if k not in idx:
+            idx[k] = len(bucket[key])
+            bucket[key].append(label)
+        for la, lo in resample(geom, ROAD_STEP_KM):
+            bucket["pts"].append([idx[k], la, lo])
+    return {**roads, "rivers": rivers}
 
 
 def write(path, doc):
@@ -180,7 +203,7 @@ def main():
         if len(roads["pts"]) < 1000 and not a.roads_input:
             raise SystemExit(f"suspiciously few road points ({len(roads['pts'])}), not writing")
         write(a.roads_out, {**meta, **roads})
-        print(f"wrote {len(roads['refs'])} roads / {len(roads['pts'])} points to {a.roads_out}", file=sys.stderr)
+        print(f"wrote {len(roads['refs'])} roads / {len(roads['pts'])} points, {len(roads['rivers']['names'])} rivers to {a.roads_out}", file=sys.stderr)
 
 
 if __name__ == "__main__":

@@ -86,6 +86,11 @@ async function loadAll(force = false) {
   state.lastDataAt = { lat, lon };
   state.status.dem = 'טוען גבהים…';
   state.status.data = 'טוען מקומות…';
+  const t0 = Date.now();
+  const tick = setInterval(() => {
+    if (state.status.data.startsWith('טוען מקומות')) state.status.data = `טוען מקומות… ${Math.round((Date.now() - t0) / 1000)} שנ׳`;
+    else clearInterval(tick);
+  }, 1000);
   const demP = state.dem.loadAround(lat, lon, (d, n) => { state.status.dem = `גבהים ${d}/${n}`; })
     .then(({ ok, total }) => { state.status.dem = ok ? (ok === total ? '' : `גבהים ${ok}/${total}`) : 'אין נתוני גובה'; })
     .catch(() => { state.status.dem = 'אין נתוני גובה'; });
@@ -94,7 +99,7 @@ async function loadAll(force = false) {
       state.pois = r.pois.map((p) => ({ ...p }));
       state.status.data = r.stale ? 'נתונים ישנים (אין רשת)' : '';
     })
-    .catch((e) => { state.status.data = 'שגיאה בטעינת מקומות'; console.error(e); });
+    .catch((e) => { state.status.data = 'שגיאה בטעינת מקומות'; state.lastError = String(e.message || e); console.error(e); });
   // Show labels as soon as the landmarks arrive, then refine once heights are in.
   await dataP; recomputeGeometry();
   await demP; recomputeGeometry();
@@ -399,7 +404,7 @@ function bindSettings() {
   $('show-hidden').onchange = (e) => { settings.showHidden = e.target.checked; saveSettings(); };
   $('show-skyline').onchange = (e) => { settings.showSkyline = e.target.checked; saveSettings(); };
   $('btn-settings').onclick = () => {
-    $('debug').textContent = `חיישן: ${orient.source} · תיקון מצפן: ${(settings.headingOffset * R2D).toFixed(1)}° · מיקום: ${state.obs ? `${state.obs.lat.toFixed(4)}, ${state.obs.lon.toFixed(4)}, ${Math.round(state.obs.h ?? 0)} מ׳` : '—'}`;
+    $('debug').textContent = `${state.lastError ? `שגיאה: ${state.lastError} · ` : ''}חיישן: ${orient.source} · תיקון מצפן: ${(settings.headingOffset * R2D).toFixed(1)}° · מיקום: ${state.obs ? `${state.obs.lat.toFixed(4)}, ${state.obs.lon.toFixed(4)}, ${Math.round(state.obs.h ?? 0)} מ׳` : '—'}`;
     $('settings').hidden = false;
   };
   $('btn-close-settings').onclick = () => { $('settings').hidden = true; };

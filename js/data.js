@@ -11,17 +11,25 @@ const CACHE_KEY = 'ma-roim:poi-cache:v1';
 const CACHE_REUSE_KM = 10;
 const CACHE_MAX_AGE_DAYS = 30;
 
+// Bounding boxes are much faster for Overpass than (around:...) radius searches.
+function bbox(lat, lon, r) {
+  const dLat = r / 111195, dLon = r / (111195 * Math.cos(lat * Math.PI / 180));
+  return `(${(lat - dLat).toFixed(4)},${(lon - dLon).toFixed(4)},${(lat + dLat).toFixed(4)},${(lon + dLon).toFixed(4)})`;
+}
+
 function buildQuery(lat, lon) {
-  const a = (r) => `(around:${r},${lat.toFixed(5)},${lon.toFixed(5)})`;
-  return `[out:json][timeout:90];
+  const b = (r) => bbox(lat, lon, r);
+  return `[out:json][timeout:40];
 (
-  node["place"~"^(city|town)$"]["name"]${a(90000)};
-  node["place"~"^(village|hamlet)$"]["name"]${a(35000)};
-  node["natural"~"^(peak|volcano)$"]["name"]${a(60000)};
-  nwr["natural"="water"]["name"]["wikidata"]${a(80000)};
-  nwr["natural"="valley"]["name"]["wikidata"]${a(60000)};
+  node["place"~"^(city|town)$"]["name"]${b(90000)};
+  node["place"~"^(village|hamlet)$"]["name"]${b(35000)};
+  node["natural"~"^(peak|volcano)$"]["name"]${b(60000)};
+  way["natural"="water"]["name"]["wikidata"]${b(80000)};
+  relation["natural"="water"]["name"]["wikidata"]${b(80000)};
+  way["natural"="valley"]["name"]["wikidata"]${b(60000)};
+  relation["natural"="valley"]["name"]["wikidata"]${b(60000)};
 );
-out tags bb;`;
+out tags bb qt;`;
 }
 
 function pickName(t) {
@@ -78,23 +86,23 @@ function normalize(el) {
   return p;
 }
 
-async function queryOverpass(q, signal) {
-  let lastErr;
-  for (const url of ENDPOINTS) {
-    try {
-      const res = await fetch(url, {
-        method: 'POST',
-        body: new URLSearchParams({ data: q }),
-        signal,
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      return await res.json();
-    } catch (e) {
-      lastErr = e;
-      if (signal?.aborted) throw e;
-    }
+/** Ask all mirrors at once; the first good answer wins, the rest are cancelled. */
+async function queryOverpass(q, timeoutMs = 45000) {
+  const ctrls = ENDPOINTS.map(() => new AbortController());
+  const timer = setTimeout(() => ctrls.forEach((c) => c.abort()), timeoutMs);
+  try {
+    return await Promise.any(ENDPOINTS.map(async (url, i) => {
+      const res = await fetch(url, { method: 'POST', body: new URLSearchParams({ data: q }), signal: ctrls[i].signal });
+      if (!res.ok) throw new Error(`${url}: HTTP ${res.status}`);
+      const json = await res.json();
+      ctrls.forEach((c, j) => { if (j !== i) c.abort(); });
+      return json;
+    }));
+  } catch (e) {
+    throw e instanceof AggregateError ? new Error(e.errors.map((x) => x.message).join('; ')) : e;
+  } finally {
+    clearTimeout(timer);
   }
-  throw lastErr;
 }
 
 function readCache() {

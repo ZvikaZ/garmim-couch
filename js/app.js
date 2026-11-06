@@ -7,7 +7,7 @@ import { loadLandmarks, loadRoads, finalizeScores, KIND_HE } from './data.js';
 import { Orientation } from './orientation.js';
 import { REGIONS } from './regions.js';
 
-const VERSION = '0.10';
+const VERSION = '0.11';
 const $ = (id) => document.getElementById(id);
 const video = $('video');
 const canvas = $('overlay');
@@ -687,34 +687,66 @@ document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && state.mode === 'live') keepAwake();
 });
 
-/**
- * Some WebViews show the first camera frame and then freeze (playback blocked, or the
- * stream stalls after a permission dialog / app switch). If the picture stops advancing,
- * restart playback, and as a last resort reopen the camera.
- */
-function watchVideo(stream) {
-  let lastT = -1, still = 0;
-  const kick = () => { if (video.paused) video.play().catch(() => {}); };
-  canvas.addEventListener('pointerdown', kick);
-  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') kick(); });
-  setInterval(async () => {
-    if (document.visibilityState !== 'visible') return;
-    const t = video.currentTime;
-    if (t === lastT || video.paused) still++; else still = 0;
-    lastT = t;
-    if (still === 2) kick();
-    if (still === 4) {
-      // reopen the camera
-      stream.getTracks().forEach((tr) => tr.stop());
-      try {
-        stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: false,
-        });
-        video.srcObject = stream;
-        await video.play().catch(() => {});
-      } catch { /* keep trying */ }
-      still = 0;
-    }
+// ---------------- camera ----------------
+// Android stops the camera when the app goes to the background, and the WebView does not
+// always bring the stream back. So: release the camera when hidden, open it fresh when
+// visible again, and if the picture still freezes (same pixels for 3 s), reopen it.
+let camStream = null, camOpening = false;
+
+async function openCamera() {
+  if (camOpening) return;
+  camOpening = true;
+  try {
+    closeCamera();
+    camStream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } },
+      audio: false,
+    });
+    video.srcObject = camStream;
+    await video.play().catch(() => {});
+    if (state.status.gps === 'אין גישה למצלמה') state.status.gps = '';
+  } catch (e) {
+    state.status.gps = 'אין גישה למצלמה';
+    console.warn(e);
+  } finally {
+    camOpening = false;
+  }
+}
+
+function closeCamera() {
+  camStream?.getTracks().forEach((t) => t.stop());
+  camStream = null;
+  video.srcObject = null;
+}
+
+const probe = document.createElement('canvas');
+probe.width = probe.height = 8;
+const probeCtx = probe.getContext('2d', { willReadFrequently: true });
+let lastSig = '', sameFor = 0;
+
+function frameSignature() {
+  if (!video.videoWidth) return '';
+  probeCtx.drawImage(video, 0, 0, 8, 8);
+  return Array.from(probeCtx.getImageData(0, 0, 8, 8).data).join(',');
+}
+
+function startCameraWatchdog() {
+  document.addEventListener('visibilitychange', () => {
+    if (state.mode !== 'live') return;
+    if (document.visibilityState === 'hidden') closeCamera();
+    else { sameFor = 0; openCamera(); }
+  });
+  canvas.addEventListener('pointerdown', () => { if (video.paused) video.play().catch(() => {}); });
+  setInterval(() => {
+    if (state.mode !== 'live' || document.visibilityState !== 'visible' || camOpening) return;
+    const track = camStream?.getVideoTracks()[0];
+    if (!track || track.readyState === 'ended') { openCamera(); return; }
+    if (video.paused) video.play().catch(() => {});
+    // A live camera never gives two identical frames (sensor noise), so identical = frozen.
+    const sig = frameSignature();
+    sameFor = sig && sig === lastSig ? sameFor + 1 : 0;
+    lastSig = sig;
+    if (sameFor >= 3) { sameFor = 0; openCamera(); }
   }, 1000);
 }
 
@@ -724,18 +756,9 @@ async function startLive() {
   keepAwake();
   // Orientation must be requested inside the click handler on iOS: do it first.
   const orientP = orient.start();
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } },
-      audio: false,
-    });
-    video.srcObject = stream;
-    await video.play().catch(() => {});
-    watchVideo(stream);
-  } catch (e) {
-    state.status.gps = 'אין גישה למצלמה';
-    console.warn(e);
-  }
+  await openCamera();
+  startCameraWatchdog();
+  try { localStorage.setItem(INTRO_KEY, '1'); } catch { /* ignore */ }
   await orientP;
   if (!navigator.geolocation) { state.status.gps = 'אין GPS'; return; }
   navigator.geolocation.watchPosition(
@@ -743,9 +766,6 @@ async function startLive() {
     (err) => { state.status.gps = err.code === 1 ? 'אין הרשאת מיקום' : 'ממתין ל-GPS…'; },
     { enableHighAccuracy: true, maximumAge: 5000, timeout: 30000 },
   );
-  const hint = $('calib-hint');
-  hint.hidden = false;
-  setTimeout(() => { hint.hidden = true; }, 6000);
 }
 
 function startDemo(params) {
@@ -766,9 +786,21 @@ function startDemo(params) {
 }
 
 bindSettings();
-$('btn-start').onclick = startLive;
+// Intro: shown on the first run only; afterwards start straight away. Help is in settings.
+const INTRO_KEY = 'ma-roim:intro-seen';
+const introSeen = (() => { try { return localStorage.getItem(INTRO_KEY) === '1'; } catch { return false; } })();
+$('btn-start').onclick = () => {
+  if (state.mode) { $('start').hidden = true; return; } // opened as help
+  startLive();
+};
+$('btn-help').onclick = () => {
+  $('settings').hidden = true;
+  $('btn-start').textContent = 'סגור';
+  $('start').hidden = false;
+};
 const params = new URLSearchParams(location.search);
 if (params.has('demo')) startDemo(params);
+else if (introSeen) startLive();
 
 // Inside the Android app (Capacitor) the files are already local: no service worker needed.
 if ('serviceWorker' in navigator && location.protocol === 'https:' && !window.Capacitor) {

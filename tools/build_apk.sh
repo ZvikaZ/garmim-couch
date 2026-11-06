@@ -40,6 +40,26 @@ if "android.permission.CAMERA" not in s:
 open(p, "w", encoding="utf-8").write(s)
 PY
 
+# The WebView must play the camera stream without an extra tap, and keep the screen on.
+MAIN=$(find android/app/src/main/java -name MainActivity.java)
+PKG=$(sed -n 's/^package \(.*\);/\1/p' "$MAIN")
+cat > "$MAIN" <<JAVA
+package $PKG;
+
+import android.os.Bundle;
+import android.view.WindowManager;
+import com.getcapacitor.BridgeActivity;
+
+public class MainActivity extends BridgeActivity {
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        this.bridge.getWebView().getSettings().setMediaPlaybackRequiresUserGesture(false);
+    }
+}
+JAVA
+
 cd android
 chmod +x gradlew
 ./gradlew --no-daemon assembleDebug

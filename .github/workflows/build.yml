@@ -31,10 +31,10 @@ jobs:
           refresh=false
           if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.refresh_data }}" = "true" ]; then refresh=true; fi
           if [ ! -f data/landmarks.json ] || [ ! -f data/roads.json ]; then refresh=true; fi
-          before="${{ github.event.before }}"
-          if [ "${{ github.event_name }}" = "push" ] && git cat-file -e "$before" 2>/dev/null; then
-            if git diff --name-only "$before" HEAD | grep -q '^tools/build_landmarks.py$'; then refresh=true; fi
-          fi
+          # data older than the script that makes it (also covers a cancelled earlier run)
+          t_tool=$(git log -1 --format=%ct -- tools/build_landmarks.py)
+          t_data=$(git log -1 --format=%ct -- data/landmarks.json data/roads.json)
+          if [ -n "$t_tool" ] && [ "${t_data:-0}" -lt "$t_tool" ]; then refresh=true; fi
           echo "refresh=$refresh" >> "$GITHUB_OUTPUT"
           echo "refresh=$refresh"
 

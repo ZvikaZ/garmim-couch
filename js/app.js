@@ -7,7 +7,7 @@ import { loadLandmarks, loadRoads, finalizeScores, KIND_HE } from './data.js';
 import { Orientation } from './orientation.js';
 import { REGIONS } from './regions.js';
 
-const VERSION = '0.9';
+const VERSION = '0.10';
 const $ = (id) => document.getElementById(id);
 const video = $('video');
 const canvas = $('overlay');
@@ -687,6 +687,37 @@ document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && state.mode === 'live') keepAwake();
 });
 
+/**
+ * Some WebViews show the first camera frame and then freeze (playback blocked, or the
+ * stream stalls after a permission dialog / app switch). If the picture stops advancing,
+ * restart playback, and as a last resort reopen the camera.
+ */
+function watchVideo(stream) {
+  let lastT = -1, still = 0;
+  const kick = () => { if (video.paused) video.play().catch(() => {}); };
+  canvas.addEventListener('pointerdown', kick);
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') kick(); });
+  setInterval(async () => {
+    if (document.visibilityState !== 'visible') return;
+    const t = video.currentTime;
+    if (t === lastT || video.paused) still++; else still = 0;
+    lastT = t;
+    if (still === 2) kick();
+    if (still === 4) {
+      // reopen the camera
+      stream.getTracks().forEach((tr) => tr.stop());
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: false,
+        });
+        video.srcObject = stream;
+        await video.play().catch(() => {});
+      } catch { /* keep trying */ }
+      still = 0;
+    }
+  }, 1000);
+}
+
 async function startLive() {
   state.mode = 'live';
   showMain();
@@ -700,6 +731,7 @@ async function startLive() {
     });
     video.srcObject = stream;
     await video.play().catch(() => {});
+    watchVideo(stream);
   } catch (e) {
     state.status.gps = 'אין גישה למצלמה';
     console.warn(e);

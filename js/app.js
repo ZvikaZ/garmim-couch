@@ -7,7 +7,7 @@ import { loadLandmarks, loadRoads, finalizeScores, KIND_HE } from './data.js';
 import { Orientation } from './orientation.js';
 import { REGIONS } from './regions.js';
 
-const VERSION = '0.14';
+const VERSION = '0.15';
 const $ = (id) => document.getElementById(id);
 const video = $('video');
 const canvas = $('overlay');
@@ -811,24 +811,43 @@ async function captureDebug() {
   const blob = await new Promise((res) => c.toBlob(res, 'image/jpeg', 0.9));
   const bytes = jpegWithComment(new Uint8Array(await blob.arrayBuffer()), json);
   const name = `ma-roim-${meta.t.replace(/[:.]/g, '-')}.jpg`;
+  let where = '';
   try {
     const P = window.Capacitor?.Plugins;
-    if (P?.Filesystem && P?.Share) {
+    if (P?.Filesystem) {
       let bin = '';
       for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-      const { uri } = await P.Filesystem.writeFile({ path: name, data: btoa(bin), directory: 'CACHE' });
-      await P.Share.share({ title: 'מה רואים – בדיקה', files: [uri] });
-      return;
+      const data = btoa(bin);
+      try {
+        await P.Filesystem.writeFile({ path: `ma-roim/${name}`, data, directory: 'DOCUMENTS', recursive: true });
+        where = 'בתיקייה Documents/ma-roim';
+      } catch {
+        // no access to shared Documents: fall back to the share sheet
+        const { uri } = await P.Filesystem.writeFile({ path: name, data, directory: 'CACHE' });
+        await P.Share?.share({ title: 'מה רואים – בדיקה', files: [uri] });
+        where = 'במקום שבחרת בשיתוף';
+      }
+    } else {
+      const file = new File([bytes], name, { type: 'image/jpeg' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(file); a.download = name; a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+      where = 'בהורדות';
     }
-    const file = new File([bytes], name, { type: 'image/jpeg' });
-    if (navigator.canShare?.({ files: [file] })) { await navigator.share({ files: [file], title: 'מה רואים – בדיקה' }); return; }
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(file); a.download = name; a.click();
-    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    $('sent-where').textContent = where;
+    $('sent-name').textContent = name;
+    $('sent').hidden = false;
   } catch (e) {
     if (e?.name !== 'AbortError') say(`השמירה נכשלה: ${e.message || e}`);
   }
 }
+const INBOX_URL = 'https://claude.ai/artifact/R5xmjq1c9Mc5FvMFKwnbmZ';
+$('btn-open-inbox').onclick = () => {
+  $('sent').hidden = true;
+  if (window.Capacitor) location.href = INBOX_URL; // the app hands it to the browser / Claude app
+  else window.open(INBOX_URL, '_blank');
+};
+$('btn-close-sent').onclick = () => { $('sent').hidden = true; };
 window.__captureDebug = captureDebug; // tests
 
 function roundRect(c, x, y, w, h, r) {

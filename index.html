@@ -76,9 +76,17 @@
     </details>
 
     <button id="btn-capture" class="secondary">📸 שמור לבדיקה (כשהכיול טועה)</button>
-    <small>שומר את תמונת המצלמה ואת נתוני החיישנים, ופותח שיתוף. שלח את התמונה ל-Claude.</small>
+    <small>שומר את תמונת המצלמה עם נתוני החיישנים, ופותח את תיבת הבדיקות שלך ב-claude.ai כדי להעלות אותה ל-Claude.</small>
     <button id="btn-help" class="secondary">הסבר ועזרה</button>
     <button id="btn-close-settings" class="primary">סגור</button>
+  </section>
+
+  <section id="sent" class="panel" hidden>
+    <h2>נשמר לבדיקה</h2>
+    <p>הקובץ <bdi id="sent-name"></bdi> נשמר <span id="sent-where"></span>.</p>
+    <p>עכשיו פתח את תיבת הבדיקות, לחץ "בחר קובץ" ובחר אותו. אם תרצה, כתוב שם במשפט מה היה לא בסדר.</p>
+    <button id="btn-open-inbox" class="primary">פתח את תיבת הבדיקות</button>
+    <button id="btn-close-sent" class="secondary">אחר כך</button>
   </section>
 
   <section id="info" class="panel" hidden>

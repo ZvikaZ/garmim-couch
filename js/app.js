@@ -7,7 +7,7 @@ import { loadLandmarks, loadRoads, finalizeScores, KIND_HE } from './data.js';
 import { Orientation } from './orientation.js';
 import { REGIONS } from './regions.js';
 
-const VERSION = '0.8';
+const VERSION = '0.9';
 const $ = (id) => document.getElementById(id);
 const video = $('video');
 const canvas = $('overlay');
@@ -53,6 +53,7 @@ function targetHeight(p) {
   if (p.kind === 'peak' || p.kind === 'volcano') return p.ele ?? (Number.isNaN(g) ? 0 : g);
   if (p.kind === 'water') return Number.isNaN(g) ? (p.ele ?? 0) : g;
   if (p.kind === 'valley' || p.kind === 'region') return Number.isNaN(g) ? 0 : g;
+  if (p.kind === 'junction') return (Number.isNaN(g) ? 0 : g) + 2;
   return (Number.isNaN(g) ? 0 : g) + 15; // settlements: aim a little above the ground (roofs)
 }
 
@@ -202,6 +203,7 @@ const KIND_STYLE = {
   fort: { color: '#e9c8ff', size: 14, weight: 700 },
   archaeological_site: { color: '#e9c8ff', size: 13, weight: 600 },
   ruins: { color: '#e9c8ff', size: 12, weight: 500 },
+  junction: { color: '#ffe9a8', size: 12, weight: 600 },
 };
 
 function resize() {

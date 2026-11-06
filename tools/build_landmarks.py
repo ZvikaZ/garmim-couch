@@ -31,6 +31,8 @@ def query():
   node["place"~"^(city|town|village|hamlet)$"]["name"]{bb};
   node["natural"~"^(peak|volcano)$"]["name"]{bb};
   node["tourism"="viewpoint"]["name"]{bb};
+  node["junction"="yes"]["name"]{bb};
+  node["highway"="motorway_junction"]["name"]{bb};
   nwr["historic"~"^(castle|fort|archaeological_site|ruins)$"]["name"]["wikidata"]{bb};
   way["natural"="water"]["name"]["wikidata"]{bb};
   relation["natural"="water"]["name"]["wikidata"]{bb};
@@ -86,7 +88,10 @@ def convert(raw):
         name = t.get("name:he") or t.get("name:en") or t.get("name")
         if not name:
             continue
-        kind = t.get("place") or t.get("natural") or ("viewpoint" if t.get("tourism") == "viewpoint" else None) or t.get("historic")
+        if t.get("junction") == "yes" or t.get("highway") == "motorway_junction":
+            kind = "junction"
+        else:
+            kind = t.get("place") or t.get("natural") or ("viewpoint" if t.get("tourism") == "viewpoint" else None) or t.get("historic")
         lat, lon, area = el.get("lat"), el.get("lon"), None
         if lat is None and "bounds" in el:
             b = el["bounds"]

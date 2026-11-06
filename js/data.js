@@ -25,6 +25,8 @@ function buildQuery(lat, lon) {
   node["place"~"^(village|hamlet)$"]["name"]${b(35000)};
   node["natural"~"^(peak|volcano)$"]["name"]${b(60000)};
   node["tourism"="viewpoint"]["name"]${b(15000)};
+  node["junction"="yes"]["name"]${b(20000)};
+  node["highway"="motorway_junction"]["name"]${b(20000)};
   nwr["historic"~"^(castle|fort|archaeological_site|ruins)$"]["name"]["wikidata"]${b(30000)};
   way["natural"="water"]["name"]["wikidata"]${b(80000)};
   relation["natural"="water"]["name"]["wikidata"]${b(80000)};
@@ -69,6 +71,7 @@ export function baseScore(p) {
     case 'archaeological_site': return 25 + (p.wikidata ? 10 : 0);
     case 'ruins': return 18;
     case 'viewpoint': return 22;
+    case 'junction': return 20;
     case 'region': return 130;
     default: return 10;
   }
@@ -86,7 +89,8 @@ function normalize(el) {
     areaKm2 = h * w * 0.6; // a lake fills roughly 60% of its bounding box
   }
   if (lat == null) return null;
-  const kind = t.place || t.natural || (t.tourism === 'viewpoint' ? 'viewpoint' : null) || t.historic;
+  const kind = (t.junction === 'yes' || t.highway === 'motorway_junction') ? 'junction'
+    : t.place || t.natural || (t.tourism === 'viewpoint' ? 'viewpoint' : null) || t.historic;
   const p = {
     id: `${el.type[0]}${el.id}`,
     kind,
@@ -132,7 +136,7 @@ function writeCache(v) {
 // ---------- pre-built static file (data/landmarks.json, made by tools/build_landmarks.py) ----------
 // Same reach per kind as the live Overpass query.
 const REACH_KM = { city: 90, town: 90, village: 35, hamlet: 35, peak: 60, volcano: 60, water: 80, valley: 60,
-  viewpoint: 15, castle: 30, fort: 30, archaeological_site: 30, ruins: 30 };
+  viewpoint: 15, castle: 30, fort: 30, archaeological_site: 30, ruins: 30, junction: 20 };
 let staticDoc = null;
 
 async function loadStatic() {
@@ -205,7 +209,7 @@ export async function loadLandmarks(lat, lon, { force = false } = {}) {
 export const KIND_HE = {
   city: 'עיר', town: 'עיירה', village: 'יישוב', hamlet: 'יישוב קטן',
   peak: 'פסגה', volcano: 'הר געש', water: 'מקווה מים', valley: 'עמק', road: 'כביש', river: 'נחל',
-  viewpoint: 'מצפור', castle: 'מבצר', fort: 'מבצר', archaeological_site: 'אתר עתיקות', ruins: 'חורבה', region: 'אזור',
+  viewpoint: 'מצפור', castle: 'מבצר', fort: 'מבצר', archaeological_site: 'אתר עתיקות', ruins: 'חורבה', region: 'אזור', junction: 'צומת',
 };
 
 /** Distance (km) from each peak to the nearest higher peak; then re-score everything. */

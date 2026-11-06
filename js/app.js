@@ -6,6 +6,7 @@ import { DEM, lineOfSight, computeSkyline } from './dem.js';
 import { loadLandmarks, finalizeScores, KIND_HE } from './data.js';
 import { Orientation } from './orientation.js';
 
+const VERSION = '0.4';
 const $ = (id) => document.getElementById(id);
 const video = $('video');
 const canvas = $('overlay');
@@ -404,7 +405,7 @@ function bindSettings() {
   $('show-hidden').onchange = (e) => { settings.showHidden = e.target.checked; saveSettings(); };
   $('show-skyline').onchange = (e) => { settings.showSkyline = e.target.checked; saveSettings(); };
   $('btn-settings').onclick = () => {
-    $('debug').textContent = `${state.lastError ? `שגיאה: ${state.lastError} · ` : ''}חיישן: ${orient.source} · תיקון מצפן: ${(settings.headingOffset * R2D).toFixed(1)}° · מיקום: ${state.obs ? `${state.obs.lat.toFixed(4)}, ${state.obs.lon.toFixed(4)}, ${Math.round(state.obs.h ?? 0)} מ׳` : '—'}`;
+    $('debug').textContent = `גרסה ${VERSION} · ${state.lastError ? `שגיאה: ${state.lastError} · ` : ''}חיישן: ${orient.source} · תיקון מצפן: ${(settings.headingOffset * R2D).toFixed(1)}° · מיקום: ${state.obs ? `${state.obs.lat.toFixed(4)}, ${state.obs.lon.toFixed(4)}, ${Math.round(state.obs.h ?? 0)} מ׳` : '—'}`;
     $('settings').hidden = false;
   };
   $('btn-close-settings').onclick = () => { $('settings').hidden = true; };

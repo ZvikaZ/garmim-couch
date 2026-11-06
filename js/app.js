@@ -7,7 +7,7 @@ import { loadLandmarks, loadRoads, finalizeScores, KIND_HE } from './data.js';
 import { Orientation } from './orientation.js';
 import { REGIONS } from './regions.js';
 
-const VERSION = '0.13';
+const VERSION = '0.14';
 const $ = (id) => document.getElementById(id);
 const video = $('video');
 const canvas = $('overlay');
@@ -561,18 +561,48 @@ window.__detectHorizon = (cw) => detectHorizon(cw); // tests
 /**
  * Find the correction that puts the computed ridge line onto the ridge in the camera image:
  * horizontal shift (heading), vertical shift (pitch), rotation (roll) and scale (field of view).
- * Returns the best fit plus `misfit` = how far off the current calibration is (px).
+ *
+ * Instead of deciding which pixels are "sky" (distant hazy mountains are as blue as the sky),
+ * we slide the predicted ridge line over the image and score each position by how well it
+ * sits on a brightness edge (brighter above: sky over land) with smooth, sky-like texture
+ * just above it. Trees or roofs that hide part of the ridge simply contribute nothing.
  */
-function computeAlign({ rolls = [0], scales = [1], range = 0.6 } = {}) {
+function computeAlign({ rolls = [0], scales = [1], rangeX = 0.3, rangeY = 0.2, step = 1, around = null } = {}) {
   const { W, H } = viewSize();
   if (!state.skyline || !orient.q) return { error: 'אין עדיין קו רכס מחושב' };
-  const cw = 160;
-  const det = detectHorizon(cw);
-  if (!det) return { error: 'לא זוהה קו רכס בתמונה' };
+  const cw = 200;
+  const fr = grabFrame(cw);
+  if (!fr) return { error: 'אין תמונת מצלמה' };
+  const { px, ch, k } = fr;
+  // luminance, vertical edge strength G and texture T (just above each point)
+  const L = new Float32Array(cw * ch);
+  for (let i = 0; i < cw * ch; i++) L[i] = 0.3 * px[i * 4] + 0.59 * px[i * 4 + 1] + 0.11 * px[i * 4 + 2];
+  const G = new Float32Array(cw * ch), T = new Float32Array(cw * ch);
+  for (let x = 0; x < cw; x++) {
+    const cum = new Float32Array(ch);
+    for (let y = 1; y < ch; y++) cum[y] = cum[y - 1] + Math.abs(L[y * cw + x] - L[(y - 1) * cw + x]);
+    for (let y = 3; y < ch - 3; y++) {
+      const above = (L[(y - 2) * cw + x] + L[(y - 1) * cw + x]) / 2;
+      const below = (L[(y + 1) * cw + x] + L[(y + 2) * cw + x]) / 2;
+      G[y * cw + x] = Math.max(0, above - below) + 0.25 * Math.abs(above - below);
+      const y1 = Math.max(1, y - 9), y2 = Math.max(1, y - 2);
+      T[y * cw + x] = (cum[y2] - cum[y1]) / Math.max(1, y2 - y1);
+    }
+  }
+  // allow ±1 px: take the best edge in a 3-px window
+  const S = new Float32Array(cw * ch);
+  for (let x = 0; x < cw; x++) {
+    for (let y = 4; y < ch - 4; y++) {
+      let g = G[y * cw + x];
+      if (G[(y - 1) * cw + x] > g) g = G[(y - 1) * cw + x];
+      if (G[(y + 1) * cw + x] > g) g = G[(y + 1) * cw + x];
+      S[y * cw + x] = Math.min(g, 60) - 1.5 * Math.min(T[y * cw + x], 30);
+    }
+  }
   const q = currentQuat(), qi = qconj(q);
   const f = baseFocal() * state.zoom;
   const cx = W / 2, cy = H / 2 + settings.pitchOffset * state.zoom;
-  // predicted ridge points on screen (current calibration)
+  // predicted ridge points, in grid units
   const pts = [];
   const n = state.skyline.length;
   for (let i = 0; i < n * 4; i++) {
@@ -582,63 +612,65 @@ function computeAlign({ rolls = [0], scales = [1], range = 0.6 } = {}) {
     if (-d[2] < 0.1) continue;
     const x = cx + f * d[0] / -d[2];
     if (x < -W || x > 2 * W) continue;
-    pts.push([x, cy - f * d[1] / -d[2]]);
+    pts.push([x * k, (cy - f * d[1] / -d[2]) * k]);
   }
-  const ext = Math.round(W * range);
-  const step = W / cw;
-  const median = (arr) => { const c = arr.slice().sort((p, q2) => p - q2); return c[Math.floor(c.length / 2)]; };
-  const sx0 = W / 2, sy0 = H / 2; // rotate/scale about the screen centre
-  let best = null, misfit = null;
+  const ex = Math.round(cw * rangeX), ey = Math.round(ch * rangeY);
+  const gx0 = cw / 2, gy0 = ch / 2;
+  let best = null;
+  const all = [];
+  let bestAtZeroX = -Infinity;
   for (const r of rolls) {
     const cr = Math.cos(r), sr = Math.sin(r);
     for (const sc of scales) {
-      const pred = new Float32Array(W + 2 * ext).fill(NaN);
+      const pred = new Float32Array(cw + 2 * ex).fill(NaN);
       for (const [x, y] of pts) {
-        const X = sx0 + sc * ((x - sx0) * cr - (y - sy0) * sr);
-        const Y = sy0 + sc * ((x - sx0) * sr + (y - sy0) * cr);
-        const xi = Math.round(X) + ext;
+        const X = gx0 + sc * ((x - gx0) * cr - (y - gy0) * sr);
+        const Y = gy0 + sc * ((x - gx0) * sr + (y - gy0) * cr);
+        const xi = Math.round(X) + ex;
         if (xi >= 0 && xi < pred.length && (Number.isNaN(pred[xi]) || Y < pred[xi])) pred[xi] = Y;
       }
       for (let x = 1; x < pred.length; x++) if (Number.isNaN(pred[x]) && !Number.isNaN(pred[x - 1])) pred[x] = pred[x - 1];
-      const evalShift = (sx, fixedSy = null) => {
-        const res = [];
-        for (let i = 0; i < cw; i++) {
-          const y = det[i];
-          if (Number.isNaN(y)) continue;
-          const py = pred[Math.round(i * step - sx) + ext];
-          if (py === undefined || Number.isNaN(py)) continue;
-          res.push(y - py);
+      // search window (grid units), optionally around a previous coarse result
+      const ax = around ? Math.round(around.sx * k) : 0, ay = around ? Math.round(around.sy * k) : 0;
+      const wx = around ? 3 : ex, wy = around ? 3 : ey;
+      for (let sx = ax - wx; sx <= ax + wx; sx += step) {
+        if (Math.abs(sx) > ex) continue;
+        for (let sy = ay - wy; sy <= ay + wy; sy += step) {
+          let sum = 0, cnt = 0;
+          for (let i = 0; i < cw; i += 2) {
+            const py = pred[i - sx + ex];
+            if (py === undefined || Number.isNaN(py)) continue;
+            const y = Math.round(py + sy);
+            if (y < 4 || y >= ch - 4) continue;
+            sum += S[y * cw + i]; cnt++;
+          }
+          if (cnt < cw * 0.2) continue; // need at least 40% of the columns (every 2nd)
+          // prefer small changes (compass errors are usually < 15°)
+          const score = sum / cnt - Math.abs(r) * R2D * 0.4 - Math.abs(sc - 1) * 20 - Math.abs(sx / k / f) * R2D * 0.08;
+          all.push(score);
+          if (sx === 0 && score > bestAtZeroX) bestAtZeroX = score;
+          if (!best || score > best.score) best = { sx: sx / k, sy: sy / k, roll: r, scale: sc, score, cnt };
         }
-        if (res.length < cw * 0.3) return null;
-        const sy = fixedSy ?? median(res);
-        return { sx, sy, roll: r, scale: sc, cost: median(res.map((v) => Math.abs(v - sy))), n: res.length };
-      };
-      if (r === 0 && sc === 1) misfit = evalShift(0, 0)?.cost ?? null;
-      for (let sx = -ext + 1; sx < ext; sx += 2) {
-        const e = evalShift(sx);
-        if (!e) continue;
-        // prefer small changes: roll, scale, and big heading jumps (compass errors are usually < 15°)
-        e.score = e.cost + Math.abs(r) * 40 + Math.abs(sc - 1) * 20 + Math.abs(sx / f) * R2D * 0.25;
-        if (!best || e.score < best.score) best = e;
       }
-      if (best && best.roll === r && best.scale === sc) best.zeroCost = evalShift(0)?.cost ?? null;
     }
   }
-  if (!best) return { error: 'לא זוהה קו רכס בתמונה', misfit };
-  // A flat ridge says nothing about left/right: keep the heading if shifting barely helps.
-  best.horizontalReliable = best.zeroCost == null || best.zeroCost - best.cost > Math.max(1.5, best.cost * 0.25);
-  best.f = f; best.H = H; best.misfit = misfit;
+  if (!best) return { error: 'הקו המחושב מחוץ לתמונה' };
+  all.sort((a, b) => a - b);
+  const med = all[Math.floor(all.length / 2)];
+  const p90 = all[Math.floor(all.length * 0.9)];
+  // how much the best stands out from the crowd
+  best.conf = (best.score - p90) / Math.max(1, p90 - med);
+  best.horizontalReliable = best.score - bestAtZeroX > 0.15 * Math.max(1, best.score - med);
+  best.f = f; best.H = H;
+  best.offDeg = Math.hypot(best.sx, best.sy) / f * R2D + Math.abs(best.roll) * R2D * 0.3;
   window.__lastAlign = best;
   return best;
 }
 
-/** Calibration quality for the badge: how far the computed ridge is from the one in the image. */
+/** Calibration quality for the badge: is there a clear ridge, and how far is our line from it? */
 function updateCalibLevel(r) {
-  const H = viewSize().H;
   let level = 'unknown';
-  if (!r.error && r.misfit != null && r.cost < H * 0.03) {
-    level = r.misfit < H * 0.015 ? 'good' : r.misfit < H * 0.04 ? 'fair' : 'bad';
-  }
+  if (!r.error && r.conf > 1.2) level = r.offDeg < 0.4 ? 'good' : r.offDeg < 1.2 ? 'fair' : 'bad';
   state.calib = { level, t: performance.now() };
 }
 
@@ -665,18 +697,20 @@ function say(t, ms = 3500) {
 /** The 🎯 button: a wide search, including roll and field of view. */
 function autoAlign() {
   const rolls = [], scales = [];
-  for (let r = -4; r <= 4; r += 1) rolls.push(r * D2R);
-  for (let sc = 0.94; sc <= 1.0601; sc += 0.02) scales.push(Math.round(sc * 100) / 100);
-  const r = computeAlign({ rolls, scales, range: 0.6 });
+  for (let r = -3; r <= 3; r += 1.5) rolls.push(r * D2R);
+  for (let sc = 0.96; sc <= 1.0401; sc += 0.04) scales.push(Math.round(sc * 100) / 100);
+  const coarse = computeAlign({ rolls, scales, rangeX: 0.35, rangeY: 0.3, step: 2 });
+  const r = coarse.error ? coarse : computeAlign({ rolls: [coarse.roll], scales: [coarse.scale], rangeX: 0.35, rangeY: 0.3, around: coarse });
+  if (!r.error) { r.conf = coarse.conf; r.horizontalReliable = coarse.horizontalReliable; }
   updateCalibLevel(r);
   if (r.error) { say(r.error); return; }
-  if (r.cost > r.H * 0.04) { say('לא הצלחתי לזהות את קו הרכס בתמונה. נסה לכוון לנוף פתוח, או גרור ידנית.'); return; }
+  if (r.conf < 1.2) { say('לא הצלחתי לזהות את קו הרכס בתמונה בביטחון. נסה לכוון לנוף פתוח, או גרור ידנית.'); return; }
   applyAlign(r, 1, { allowScale: true });
   saveSettings();
   rememberCalibration();
   state.calib = { level: 'good', t: performance.now() };
   const parts = [r.horizontalReliable ? `${(r.sx / r.f * R2D).toFixed(1)}° אופקי` : 'כיוון ללא שינוי (רכס שטוח)', `${(Math.atan(r.sy / r.f) * R2D).toFixed(1)}° אנכי`];
-  if (r.roll) parts.push(`${(r.roll * R2D).toFixed(0)}° הטיה`);
+  if (r.roll) parts.push(`${(r.roll * R2D).toFixed(1)}° הטיה`);
   if (r.scale !== 1) parts.push(`שדה ראייה ${settings.fov.toFixed(0)}°`);
   say(`יושר: ${parts.join(', ')}`);
   checkCompassHealth();
@@ -688,10 +722,10 @@ let lastInteraction = 0;
 function continuousAlignTick() {
   if (state.mode !== 'live' || gesture || document.visibilityState !== 'visible') return;
   if (performance.now() - lastInteraction < 3000) return;
-  const r = computeAlign({ rolls: [-1.5 * D2R, 0, 1.5 * D2R], scales: [1], range: 0.25 });
+  const r = computeAlign({ rolls: [-1 * D2R, 0, 1 * D2R], scales: [1], rangeX: 0.12, rangeY: 0.1 });
   updateCalibLevel(r);
-  if (!settings.autoAlign || state.drive.active || r.error || r.cost > r.H * 0.02) return;
-  if (Math.abs(r.sx / r.f) > 6 * D2R || Math.abs(Math.atan(r.sy / r.f)) > 5 * D2R) return; // too big to trust silently
+  if (!settings.autoAlign || state.drive.active || r.error || r.conf < 2) return;
+  if (r.offDeg > 5) return; // too big to trust silently
   applyAlign(r, 0.5);
 }
 setInterval(continuousAlignTick, 2500);
@@ -752,7 +786,7 @@ async function captureDebug() {
   if (!vw) { say('אין תמונת מצלמה לשמור'); return; }
   const { W, H } = viewSize();
   let fit = null;
-  try { fit = computeAlign({ rolls: [0], scales: [1], range: 0.25 }); } catch { /* ignore */ }
+  try { fit = computeAlign({ rolls: [0], scales: [1], rangeX: 0.2, rangeY: 0.2 }); } catch { /* ignore */ }
   const r3 = (x) => (x == null ? null : Math.round(x * 1000) / 1000);
   const meta = {
     v: VERSION, t: new Date().toISOString(),
@@ -761,7 +795,7 @@ async function captureDebug() {
     off: { h: r3(settings.headingOffset), p: r3(settings.pitchOffset), r: r3(settings.rollOffset || 0) },
     fov: settings.fov, zoom: r3(state.zoom), view: [W, H, window.devicePixelRatio], video: [vw, vh],
     scr: screen.orientation?.angle ?? 0, drive: state.drive.active, speed: state.drive.speed,
-    calib: state.calib?.level, fit: fit && !fit.error ? { sx: r3(fit.sx), sy: r3(fit.sy), roll: r3(fit.roll), cost: r3(fit.cost), misfit: r3(fit.misfit) } : fit?.error,
+    calib: state.calib?.level, fit: fit && !fit.error ? { sx: r3(fit.sx), sy: r3(fit.sy), roll: r3(fit.roll), conf: r3(fit.conf), off: r3(fit.offDeg) } : fit?.error,
   };
   const json = JSON.stringify(meta);
   // image: full camera frame + text strip

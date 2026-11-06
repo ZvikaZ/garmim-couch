@@ -195,7 +195,7 @@ export async function loadLandmarks(lat, lon, { force = false } = {}) {
 
 export const KIND_HE = {
   city: 'עיר', town: 'עיירה', village: 'יישוב', hamlet: 'יישוב קטן',
-  peak: 'פסגה', volcano: 'הר געש', water: 'מקווה מים', valley: 'עמק',
+  peak: 'פסגה', volcano: 'הר געש', water: 'מקווה מים', valley: 'עמק', road: 'כביש',
 };
 
 /** Distance (km) from each peak to the nearest higher peak; then re-score everything. */
@@ -217,4 +217,27 @@ export function finalizeScores(pois) {
     p.score = baseScore(p);
   }
   return pois;
+}
+
+// ---------- roads (data/roads.json: numbered roads resampled every ~600 m) ----------
+let roadsDoc = null;
+const ROAD_REACH_KM = 20;
+
+/** Points along numbered roads near (lat, lon): [{ ref, lat, lon }]. Empty if unavailable. */
+export async function loadRoads(lat, lon) {
+  try {
+    if (!roadsDoc) {
+      const res = await fetch('data/roads.json', { cache: 'no-cache' });
+      if (!res.ok) return [];
+      roadsDoc = await res.json();
+    }
+  } catch { return []; }
+  const out = [];
+  const dLat = ROAD_REACH_KM / 111;
+  for (const [ri, la, lo] of roadsDoc.pts) {
+    if (Math.abs(la - lat) > dLat) continue;
+    if (distBearing(lat, lon, la, lo).d / 1000 > ROAD_REACH_KM) continue;
+    out.push({ kind: 'road', ref: roadsDoc.refs[ri], name: `כביש ${roadsDoc.refs[ri]}`, lat: la, lon: lo });
+  }
+  return out;
 }

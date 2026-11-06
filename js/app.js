@@ -3,10 +3,10 @@ import {
   compassName, D2R, R2D,
 } from './geo.js';
 import { DEM, lineOfSight, computeSkyline } from './dem.js';
-import { loadLandmarks, finalizeScores, KIND_HE } from './data.js';
+import { loadLandmarks, loadRoads, finalizeScores, KIND_HE } from './data.js';
 import { Orientation } from './orientation.js';
 
-const VERSION = '0.5';
+const VERSION = '0.6';
 const $ = (id) => document.getElementById(id);
 const video = $('video');
 const canvas = $('overlay');
@@ -14,7 +14,7 @@ const ctx = canvas.getContext('2d');
 
 // ---------------- persisted settings ----------------
 const SETTINGS_KEY = 'ma-roim:settings:v1';
-const defaults = { fov: 66, density: 1, showHidden: false, showSkyline: true, headingOffset: 0, pitchOffset: 0 };
+const defaults = { fov: 66, density: 1, showHidden: false, showSkyline: true, showRoads: true, headingOffset: 0, pitchOffset: 0 };
 function loadSettings() {
   try { return { ...defaults, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}') }; } catch { return { ...defaults }; }
 }
@@ -30,6 +30,7 @@ const state = {
   lastGeomAt: null,      // obs used for the last geometry pass
   lastDataAt: null,      // obs used for the last data/DEM load
   pois: [],
+  roads: [],
   skyline: null,
   skyStep: 0.5,
   zoom: 1,
@@ -78,6 +79,14 @@ function recomputeGeometry() {
       p.visible = true;
     }
   }
+  for (const r of state.roads) {
+    const { d, brg } = distBearing(obs.lat, obs.lon, r.lat, r.lon);
+    r.d = d; r.brg = brg;
+    const g2 = state.dem.elevation(r.lat, r.lon);
+    r.h = (Number.isNaN(g2) ? 0 : g2) + 1;
+    r.angle = elevationAngle(r.h - obs.h, d);
+    r.visible = haveDem && d > 300 ? lineOfSight(state.dem, obs, r, r.h, d, brg).clearance > -0.002 : true;
+  }
   state.skyline = haveDem ? computeSkyline(state.dem, obs, state.skyStep) : null;
   state.lastGeomAt = { lat: obs.lat, lon: obs.lon };
 }
@@ -101,8 +110,9 @@ async function loadAll(force = false) {
       state.status.data = r.stale ? 'נתונים ישנים (אין רשת)' : '';
     })
     .catch((e) => { state.status.data = 'שגיאה בטעינת מקומות'; state.lastError = String(e.message || e); console.error(e); });
+  const roadsP = loadRoads(lat, lon).then((r) => { state.roads = r; });
   // Show labels as soon as the landmarks arrive, then refine once heights are in.
-  await dataP; recomputeGeometry();
+  await Promise.all([dataP, roadsP]); recomputeGeometry();
   await demP; recomputeGeometry();
 }
 
@@ -261,7 +271,49 @@ function render() {
     ctx.fillText(sub, box.x + box.w / 2, box.y + box.h - 4);
     ctx.globalAlpha = 1;
   }
+  if (settings.showRoads) drawRoads(project, W, H, overlaps);
   updateHud(q);
+}
+
+/** Road-number shields, drawn on the road itself. A few per road, spread across the view. */
+function drawRoads(project, W, H, overlaps) {
+  const reachM = 12000 * state.zoom * settings.density;
+  const byRef = new Map();
+  for (const r of state.roads) {
+    if (r.d == null || r.d < 350 || r.d > reachM || !r.visible) continue;
+    const pt = project(dirVector(r.brg, r.angle));
+    if (!pt || pt[0] < 20 || pt[0] > W - 20 || pt[1] < 60 || pt[1] > H - 80) continue;
+    if (!byRef.has(r.ref)) byRef.set(r.ref, []);
+    byRef.get(r.ref).push({ r, x: pt[0], y: pt[1] });
+  }
+  const perRef = state.zoom > 2 ? 3 : 2;
+  const maxShields = Math.round(6 * Math.sqrt(state.zoom) * settings.density);
+  // nearest roads first
+  const groups = [...byRef.values()].map((g) => g.sort((a, b) => a.r.d - b.r.d)).sort((a, b) => a[0].r.d - b[0].r.d);
+  let drawn = 0;
+  ctx.font = '700 13px system-ui, sans-serif';
+  for (const g of groups) {
+    const chosen = [];
+    for (const c of g) {
+      if (chosen.length >= perRef || drawn >= maxShields) break;
+      if (chosen.some((o) => Math.abs(o.x - c.x) < W / 4)) continue;
+      const w = Math.max(28, ctx.measureText(c.r.ref).width + 12), h = 20;
+      const box = { x: c.x - w / 2, y: c.y - h - 6, w, h };
+      if (overlaps(box)) continue;
+      box.p = c.r;
+      state.placed.push(box);
+      chosen.push(c);
+      drawn++;
+      ctx.fillStyle = 'rgba(0,0,0,0.6)';
+      ctx.beginPath(); ctx.arc(c.x, c.y, 2.5, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#ffffff';
+      ctx.strokeStyle = '#1a3a6b';
+      ctx.lineWidth = 2;
+      roundRect(ctx, box.x, box.y, box.w, box.h, 5); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = '#1a3a6b';
+      ctx.fillText(c.r.ref, c.x, box.y + 15);
+    }
+  }
 }
 
 /** Demo mode has no camera: paint the computed ridge line as a silhouette so it looks like a view. */
@@ -373,7 +425,8 @@ function onTap(x, y) {
 function showInfo(p) {
   $('info-name').textContent = p.name;
   const lines = [KIND_HE[p.kind] || p.kind, `${fmtKm(p.d)} ק״מ`, `כיוון ${Math.round(p.brg * R2D)}°`];
-  if (p.ele != null) lines.push(`גובה ${Math.round(p.ele)} מ׳`);
+  if (p.kind === 'road') lines.splice(0, 1);
+  if (p.kind === 'road') { /* nothing more */ } else if (p.ele != null) lines.push(`גובה ${Math.round(p.ele)} מ׳`);
   else if (p.h != null && p.kind !== 'water') lines.push(`גובה ~${Math.round(p.h)} מ׳`);
   if (p.pop) lines.push(`${p.pop.toLocaleString('he-IL')} תושבים`);
   if (!p.visible) lines.push('כנראה מוסתר מאחורי רכס');
@@ -400,6 +453,8 @@ function bindSettings() {
   dens.value = settings.density; $('density-out').textContent = settings.density;
   $('show-hidden').checked = settings.showHidden;
   $('show-skyline').checked = settings.showSkyline;
+  $('show-roads').checked = settings.showRoads;
+  $('show-roads').onchange = (e) => { settings.showRoads = e.target.checked; saveSettings(); };
   fov.oninput = () => { settings.fov = +fov.value; $('fov-out').textContent = fov.value; saveSettings(); };
   dens.oninput = () => { settings.density = +dens.value; $('density-out').textContent = dens.value; saveSettings(); };
   $('show-hidden').onchange = (e) => { settings.showHidden = e.target.checked; saveSettings(); };
@@ -474,10 +529,10 @@ function startDemo(params) {
 
 bindSettings();
 $('btn-start').onclick = startLive;
-$('btn-demo').onclick = () => startDemo(new URLSearchParams(location.search));
 const params = new URLSearchParams(location.search);
 if (params.has('demo')) startDemo(params);
 
-if ('serviceWorker' in navigator && location.protocol === 'https:') {
+// Inside the Android app (Capacitor) the files are already local: no service worker needed.
+if ('serviceWorker' in navigator && location.protocol === 'https:' && !window.Capacitor) {
   navigator.serviceWorker.register('sw.js').catch(() => {});
 }

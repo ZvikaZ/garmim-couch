@@ -30,10 +30,9 @@
     <h1>מה רואים?</h1>
     <p>מרימים את הטלפון לכיוון הנוף ורואים שמות של הרים, יישובים ונקודות ציון.</p>
     <button id="btn-start" class="primary">התחל</button>
-    <button id="btn-demo" class="secondary">מצב הדגמה (בלי מצלמה)</button>
     <ul class="tips">
       <li>צריך הרשאה למצלמה, למיקום ולחיישני התנועה.</li>
-      <li>אם התוויות זזות הצידה, גרור את המסך כדי לתקן את המצפן. התיקון נשמר.</li>
+      <li>הקו הצהוב הוא קו הרכס המחושב. אם הוא לא יושב על הרכס האמיתי, גרור את המסך עד שהוא יושב. התיקון נשמר.</li>
       <li>צביטה עם שתי אצבעות: זום, ובזום מופיעים גם מקומות קטנים יותר.</li>
       <li>לחיצה על תווית: פרטים נוספים.</li>
     </ul>
@@ -42,17 +41,31 @@
 
   <section id="settings" class="panel" hidden>
     <h2>הגדרות</h2>
-    <label>שדה ראייה של המצלמה (הצלע הארוכה): <output id="fov-out"></output>°
-      <input id="fov" type="range" min="40" max="100" step="1">
-    </label>
+
     <label>צפיפות תוויות: <output id="density-out"></output>
       <input id="density" type="range" min="0.4" max="2.5" step="0.1">
+      <small>כמה שמות להציג ועד כמה רחוק. הזז שמאלה אם המסך עמוס, ימינה אם חסרים מקומות קטנים.</small>
     </label>
-    <label class="row"><input id="show-hidden" type="checkbox"> להציג גם מקומות מוסתרים מאחורי הרים (בשקיפות)</label>
-    <label class="row"><input id="show-skyline" type="checkbox"> להציג קו רכס מחושב</label>
-    <button id="btn-refresh" class="secondary">רענון נתונים מהשרת</button>
+
+    <label class="row"><input id="show-roads" type="checkbox"> מספרי כבישים</label>
+
+    <label class="row"><input id="show-skyline" type="checkbox"> קו רכס צהוב</label>
+    <small>הקו הוא קו האופק כפי שהוא מחושב מהמפה הטופוגרפית. אם הוא יושב על הרכס האמיתי, הכיוון מכויל. אם לא, גרור את המסך עד שהוא יושב עליו.</small>
+
+    <label class="row"><input id="show-hidden" type="checkbox"> גם מקומות מוסתרים</label>
+    <small>מקומות שנמצאים מאחורי הר ולא נראים מכאן יוצגו בשקיפות.</small>
+
+    <details>
+      <summary>מתקדם</summary>
+      <label>שדה ראייה של המצלמה: <output id="fov-out"></output>°
+        <input id="fov" type="range" min="40" max="100" step="1">
+        <small>לשנות רק אם אחרי כיול הקו הצהוב יושב על הרכס במרכז המסך אבל מתרחק ממנו בקצוות. אם בקצוות הקו "מתפרש" רחב מדי, להגדיל; אם צר מדי, להקטין.</small>
+      </label>
+      <button id="btn-refresh" class="secondary">משיכת מקומות מהשרת (אם חסר משהו)</button>
+      <p id="debug" class="credit"></p>
+    </details>
+
     <button id="btn-close-settings" class="primary">סגור</button>
-    <p id="debug" class="credit"></p>
   </section>
 
   <section id="info" class="panel" hidden>

@@ -38,8 +38,8 @@ def query():
 out tags bb qt;"""
 
 
-def fetch():
-    body = urllib.parse.urlencode({"data": query()}).encode()
+def fetch(q):
+    body = urllib.parse.urlencode({"data": q}).encode()
     last = None
     for attempt in range(3):
         for url in ENDPOINTS:
@@ -112,28 +112,75 @@ def convert(raw):
     return out
 
 
+def roads_query():
+    s, w, n, e = REGION
+    return f"""[out:json][timeout:300];
+way["highway"~"^(motorway|trunk|primary|secondary)$"]["ref"]({s},{w},{n},{e});
+out tags geom qt;"""
+
+
+ROAD_STEP_KM = 0.6
+
+
+def convert_roads(raw):
+    """Resample every numbered road to a point every ~600 m: [refIndex, lat, lon]."""
+    refs, ref_idx, pts = [], {}, []
+    for el in raw.get("elements", []):
+        ref = (el.get("tags", {}).get("ref") or "").split(";")[0].strip()
+        geom = el.get("geometry") or []
+        if not ref or len(geom) < 2:
+            continue
+        if ref not in ref_idx:
+            ref_idx[ref] = len(refs)
+            refs.append(ref)
+        ri = ref_idx[ref]
+        carry = ROAD_STEP_KM / 2  # distance to the next sample along the way
+        for a, b in zip(geom, geom[1:]):
+            seg = dist_km(a["lat"], a["lon"], b["lat"], b["lon"])
+            pos = carry
+            while pos <= seg:
+                t = pos / seg if seg else 0
+                pts.append([ri, round(a["lat"] + (b["lat"] - a["lat"]) * t, 5), round(a["lon"] + (b["lon"] - a["lon"]) * t, 5)])
+                pos += ROAD_STEP_KM
+            carry = pos - seg
+    return {"refs": refs, "pts": pts}
+
+
+def write(path, doc):
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(doc, f, ensure_ascii=False, separators=(",", ":"))
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--input", help="use a saved Overpass JSON instead of downloading")
+    ap.add_argument("--input", help="use a saved Overpass JSON instead of downloading (landmarks)")
+    ap.add_argument("--roads-input", help="use a saved Overpass JSON instead of downloading (roads)")
     ap.add_argument("--out", default="data/landmarks.json")
+    ap.add_argument("--roads-out", default="data/roads.json")
+    ap.add_argument("--what", choices=["all", "landmarks", "roads"], default="all")
     a = ap.parse_args()
-    raw = json.load(open(a.input, encoding="utf-8")) if a.input else fetch()
-    pois = convert(raw)
-    if len(pois) < 500 and not a.input:
-        raise SystemExit(f"suspiciously few landmarks ({len(pois)}), not writing")
-    doc = {
-        "generated": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "region": REGION,
-        "source": "© OpenStreetMap contributors, ODbL",
-        "pois": pois,
-    }
-    os.makedirs(os.path.dirname(a.out) or ".", exist_ok=True)
-    with open(a.out, "w", encoding="utf-8") as f:
-        json.dump(doc, f, ensure_ascii=False, separators=(",", ":"))
-    kinds = {}
-    for p in pois:
-        kinds[p["k"]] = kinds.get(p["k"], 0) + 1
-    print(f"wrote {len(pois)} landmarks to {a.out}: {kinds}", file=sys.stderr)
+    stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    meta = {"generated": stamp, "region": REGION, "source": "© OpenStreetMap contributors, ODbL"}
+
+    if a.what in ("all", "landmarks"):
+        raw = json.load(open(a.input, encoding="utf-8")) if a.input else fetch(query())
+        pois = convert(raw)
+        if len(pois) < 500 and not a.input:
+            raise SystemExit(f"suspiciously few landmarks ({len(pois)}), not writing")
+        write(a.out, {**meta, "pois": pois})
+        kinds = {}
+        for p in pois:
+            kinds[p["k"]] = kinds.get(p["k"], 0) + 1
+        print(f"wrote {len(pois)} landmarks to {a.out}: {kinds}", file=sys.stderr)
+
+    if a.what in ("all", "roads"):
+        raw = json.load(open(a.roads_input, encoding="utf-8")) if a.roads_input else fetch(roads_query())
+        roads = convert_roads(raw)
+        if len(roads["pts"]) < 1000 and not a.roads_input:
+            raise SystemExit(f"suspiciously few road points ({len(roads['pts'])}), not writing")
+        write(a.roads_out, {**meta, **roads})
+        print(f"wrote {len(roads['refs'])} roads / {len(roads['pts'])} points to {a.roads_out}", file=sys.stderr)
 
 
 if __name__ == "__main__":

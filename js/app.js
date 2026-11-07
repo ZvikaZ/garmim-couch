@@ -7,7 +7,7 @@ import { loadLandmarks, loadRoads, finalizeScores, KIND_HE } from './data.js';
 import { Orientation } from './orientation.js';
 import { REGIONS } from './regions.js';
 
-const VERSION = '0.20';
+const VERSION = '0.21';
 const $ = (id) => document.getElementById(id);
 const video = $('video');
 const canvas = $('overlay');
@@ -15,7 +15,7 @@ const ctx = canvas.getContext('2d');
 
 // ---------------- persisted settings ----------------
 const SETTINGS_KEY = 'ma-roim:settings:v1';
-const defaults = { fov: 66, density: 1, showHidden: false, showSkyline: true, showRoads: true, showPrayer: true, showCompass: true, narrate: false, driveMode: true, autoAlign: true, headingOffset: 0, pitchOffset: 0, rollOffset: 0 };
+const defaults = { fov: 66, density: 1, showHidden: false, showSkyline: true, showRoads: true, showPrayer: true, showCompass: true, narrate: false, narrateWhat: { pass: true, ahead: true, view: true }, musicMode: 'pause', driveMode: true, autoAlign: true, headingOffset: 0, pitchOffset: 0, rollOffset: 0 };
 function loadSettings() {
   try { return { ...defaults, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}') }; } catch { return { ...defaults }; }
 }
@@ -179,17 +179,30 @@ function updateDrive(gpsHeading, speed) {
 }
 
 // ---------------- spoken narration while driving ----------------
-// Every few seconds, while moving, pick the most notable visible place to the side or ahead
-// that has not been mentioned recently, and say it: "משמאל, הר החרמון, 45 קילומטר".
-// Left/right comes from the direction of travel, so the phone can sit anywhere in the car.
-const spoken = new Map(); // name -> time last said
+// Three kinds of messages, in this order of priority (left/right from the GPS course, so the
+// phone can sit anywhere in the car):
+//  1. passing by:  a town/village we are driving past right now (< 2.5 km, to the side)
+//                  "עוברים ליד כפר בלום, מימין"
+//  2. ahead:       the town the road is heading into (< 8 km, straight ahead)
+//                  "לפנים: קרית שמונה, 6 קילומטר"
+//  3. in view:     a major landmark the first time it can be seen on this trip (big
+//                  mountains, lakes, cities)            "מימין: הר החרמון, 45 קילומטר"
+// Each place is said once per trip (3 hours), at most one message every 25 s.
+const spoken = new Map(); // id -> time said
 let lastSpokenAt = 0;
-const SPEAK_GAP = 30000, REPEAT_AFTER = 20 * 60000;
+const SPEAK_GAP = 25000, REPEAT_AFTER = 3 * 3600e3;
+const SETTLEMENT = new Set(['city', 'town', 'village']);
 
 async function speak(text) {
-  const tts = window.Capacitor?.Plugins?.TextToSpeech;
+  const P = window.Capacitor?.Plugins;
+  const focus = settings.musicMode !== 'none' ? P?.AudioFocus : null;
   try {
-    if (tts) { await tts.speak({ text, lang: 'he-IL', rate: 1.0, category: 'playback' }); return true; }
+    if (P?.TextToSpeech) {
+      try { await focus?.request({ duck: settings.musicMode === 'duck' }); } catch { /* ignore */ }
+      try { await P.TextToSpeech.speak({ text, lang: 'he-IL', rate: 1.0, category: 'playback' }); }
+      finally { setTimeout(() => focus?.release().catch(() => {}), 400); }
+      return true;
+    }
     if ('speechSynthesis' in window) {
       const u = new SpeechSynthesisUtterance(text);
       u.lang = 'he-IL';
@@ -207,33 +220,58 @@ function spokenKm(m) {
   return km < 10 ? `${km.toFixed(1).replace('.0', '')} קילומטר` : `${Math.round(km)} קילומטר`;
 }
 
+/** Is this a landmark worth announcing when it comes into view? */
+function isMajorLandmark(p) {
+  if (p.kind === 'city') return true;
+  if (p.kind === 'town') return (p.pop ?? 0) >= 15000;
+  if (p.kind === 'water') return (p.areaKm2 ?? 0) >= 2;
+  if (p.kind === 'peak' || p.kind === 'volcano') return (p.ele ?? 0) >= 500 && (p.isoKm ?? 0) >= 8 && !!p.wikidata;
+  if (p.kind === 'castle' || p.kind === 'fort') return !!p.wikidata;
+  return false;
+}
+
+function pickMessage(now) {
+  // remembered per kind of message: seeing a city far away and later passing it are both worth saying
+  const fresh = (p, kind) => { const t = spoken.get(`${kind}:${p.id || p.name}`); return !t || now - t > REPEAT_AFTER; };
+  const n = settings.narrateWhat || {};
+  let pass = null, ahead = null, view = null;
+  for (const p of state.pois) {
+    if (p.d == null) continue;
+    const rel = wrapPi(p.brg - state.course), arel = Math.abs(rel) * R2D;
+    if (n.pass !== false && fresh(p, 'pass') && SETTLEMENT.has(p.kind) && p.d < 2500 && p.d > 200 && arel > 45 && arel < 135) {
+      if (!pass || p.d < pass.p.d) pass = { p, rel };
+    }
+    if (n.ahead !== false && fresh(p, 'ahead') && SETTLEMENT.has(p.kind) && p.kind !== 'village' && p.d < 8000 && p.d > 1500 && arel < 15) {
+      if (!ahead || p.d < ahead.p.d) ahead = { p, rel };
+    }
+    if (n.view !== false && fresh(p, 'view') && p.visible && isMajorLandmark(p) && arel < 110 && p.d > 3000 && p.d / 1000 < p.score * 0.4) {
+      const rank = p.score / (1 + p.d / 30000);
+      if (!view || rank > view.rank) view = { p, rel, rank };
+    }
+  }
+  const side = (rel) => (rel < 0 ? 'משמאל' : 'מימין');
+  if (pass) return { key: 'pass', p: pass.p, text: `עוברים ליד ${pass.p.name}, ${side(pass.rel)}` };
+  if (ahead) return { key: 'ahead', p: ahead.p, text: `לפנים: ${ahead.p.name}, ${spokenKm(ahead.p.d)}` };
+  if (view) {
+    const where = Math.abs(view.rel) * R2D < 20 ? 'לפנים' : side(view.rel);
+    return { key: 'view', p: view.p, text: `${where}: ${view.p.name}, ${spokenKm(view.p.d)}` };
+  }
+  return null;
+}
+
 function narrateTick() {
   if (!settings.narrate || state.mode !== 'live' || state.course == null || !state.obs) return;
   const now = Date.now();
   if (now - lastSpokenAt < SPEAK_GAP) return;
-  let best = null;
-  for (const p of state.pois) {
-    if (p.d == null || !p.visible || p.kind === 'junction' || p.kind === 'ruins' || p.kind === 'viewpoint') continue;
-    if (p.score < 55 && p.kind !== 'region') continue;        // only notable places
-    if (p.d < 1500 || p.d / 1000 > p.score * 0.4) continue;    // not the one you're in, not too far
-    const t = spoken.get(p.name);
-    if (t && now - t < REPEAT_AFTER) continue;
-    const rel = wrapPi(p.brg - state.course);
-    if (Math.abs(rel) > 110 * D2R) continue;                   // behind you
-    const rank = p.score / (1 + p.d / 20000) * (p.kind === 'region' ? 0.6 : 1);
-    if (!best || rank > best.rank) best = { p, rel, rank };
-  }
-  if (!best) return;
-  const r = best.rel * R2D;
-  const side = Math.abs(r) < 20 ? 'לפנים' : r < 0 ? 'משמאל' : 'מימין';
-  const text = best.p.kind === 'region' ? `${side}, ${best.p.name}` : `${side}, ${best.p.name}, ${spokenKm(best.p.d)}`;
-  spoken.set(best.p.name, now);
+  const m = pickMessage(now);
+  if (!m) return;
+  spoken.set(`${m.key}:${m.p.id || m.p.name}`, now);
   lastSpokenAt = now;
-  state.lastSpoken = text;
-  speak(text);
-  say(`🔊 ${text}`, 4000);
+  state.lastSpoken = m.text;
+  speak(m.text);
+  say(`🔊 ${m.text}`, 4000);
 }
-setInterval(narrateTick, 4000);
+setInterval(narrateTick, 3000);
 window.__narrate = { tick: narrateTick, spoken, resetGap: () => { lastSpokenAt = 0; } }; // tests
 
 // ---------------- camera model ----------------
@@ -1190,6 +1228,13 @@ function bindSettings() {
   $('show-prayer').checked = settings.showPrayer;
   $('show-compass').checked = settings.showCompass;
   $('narrate').checked = settings.narrate;
+  for (const k of ['pass', 'ahead', 'view']) {
+    const el = $(`narrate-${k}`);
+    el.checked = (settings.narrateWhat || {})[k] !== false;
+    el.onchange = () => { settings.narrateWhat = { ...(settings.narrateWhat || {}), [k]: el.checked }; saveSettings(); };
+  }
+  $('music-mode').value = settings.musicMode || 'pause';
+  $('music-mode').onchange = (e) => { settings.musicMode = e.target.value; saveSettings(); };
   $('narrate').onchange = (e) => {
     settings.narrate = e.target.checked; saveSettings();
     if (settings.narrate) speak('הקראה בנסיעה פעילה'); // also unlocks speech on the web (needs a tap)

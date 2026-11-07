@@ -85,3 +85,7 @@ button.secondary { background: rgba(255,255,255,.12); color: var(--text); }
 .calib-good { background: #1f8a4c; color: #fff; }
 .calib-fair { background: #b8860b; color: #fff; }
 .calib-bad { background: #b3261e; color: #fff; }
+.panel .sub { margin-inline-start: 22px; padding-inline-start: 10px; border-inline-start: 2px solid rgba(255,255,255,.15); }
+.panel .sub label { margin: 8px 0; }
+.panel small.inline { display: inline; margin: 0; }
+.panel select { font: inherit; margin-inline-start: 6px; padding: 4px 8px; border-radius: 8px; background: rgba(255,255,255,.12); color: var(--text); border: 0; }

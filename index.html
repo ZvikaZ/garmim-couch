@@ -61,7 +61,19 @@
     <small>כל כמה שניות האפליקציה בודקת את הרכס בתמונה ומתקנת את הקו הצהוב קצת, רק כשההתאמה ברורה.</small>
 
     <label class="row"><input id="narrate" type="checkbox"> 🔊 הקראה בנסיעה</label>
-    <small>בנסיעה הטלפון אומר בקול מה רואים מימין, משמאל ולפנים, למשל "משמאל, הר החרמון, 45 קילומטר". לא צריך לכוון את הטלפון. הקול יוצא גם ברמקולי הרכב דרך Bluetooth.</small>
+    <small>בנסיעה הטלפון אומר בקול מה רואים. ימין ושמאל נקבעים לפי כיוון הנסיעה, כך שלא צריך לכוון את הטלפון.</small>
+    <div class="sub">
+      <label class="row"><input id="narrate-pass" type="checkbox"> יישובים שעוברים לידם <small class="inline">"עוברים ליד כפר בלום, מימין"</small></label>
+      <label class="row"><input id="narrate-ahead" type="checkbox"> העיר שלפנים <small class="inline">"לפנים: קרית שמונה, 6 קילומטר"</small></label>
+      <label class="row"><input id="narrate-view" type="checkbox"> נופים גדולים כשהם נגלים <small class="inline">"מימין: הר החרמון, 45 קילומטר"</small></label>
+      <label>מוזיקה בזמן הקראה:
+        <select id="music-mode">
+          <option value="pause">לעצור לרגע</option>
+          <option value="duck">להנמיך</option>
+          <option value="none">לא לגעת</option>
+        </select>
+      </label>
+    </div>
 
     <label class="row"><input id="drive-mode" type="checkbox"> מצב נסיעה אוטומטי</label>
     <small>ברכב המצפן לא אמין. בנסיעה, כשהטלפון מכוון קדימה, הכיוון נלקח מכיוון הנסיעה ב-GPS.</small>

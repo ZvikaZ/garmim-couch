@@ -42,8 +42,62 @@ open(p, "w", encoding="utf-8").write(s)
 PY
 
 # The WebView must play the camera stream without an extra tap, and keep the screen on.
+# A tiny local plugin asks Android for audio focus around spoken messages, so music
+# pauses (or gets quieter) while the app speaks, like navigation apps do.
 MAIN=$(find android/app/src/main/java -name MainActivity.java)
 PKG=$(sed -n 's/^package \(.*\);/\1/p' "$MAIN")
+cat > "$(dirname "$MAIN")/AudioFocusPlugin.java" <<JAVA
+package $PKG;
+
+import android.content.Context;
+import android.media.AudioAttributes;
+import android.media.AudioFocusRequest;
+import android.media.AudioManager;
+import android.os.Build;
+import com.getcapacitor.JSObject;
+import com.getcapacitor.Plugin;
+import com.getcapacitor.PluginCall;
+import com.getcapacitor.PluginMethod;
+import com.getcapacitor.annotation.CapacitorPlugin;
+
+@CapacitorPlugin(name = "AudioFocus")
+public class AudioFocusPlugin extends Plugin {
+    private AudioFocusRequest req;
+
+    private AudioManager am() {
+        return (AudioManager) getContext().getSystemService(Context.AUDIO_SERVICE);
+    }
+
+    @PluginMethod
+    public void request(PluginCall call) {
+        boolean duck = Boolean.TRUE.equals(call.getBoolean("duck", false));
+        int gain = duck ? AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK : AudioManager.AUDIOFOCUS_GAIN_TRANSIENT;
+        int res;
+        if (Build.VERSION.SDK_INT >= 26) {
+            req = new AudioFocusRequest.Builder(gain)
+                .setAudioAttributes(new AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
+                .build();
+            res = am().requestAudioFocus(req);
+        } else {
+            res = am().requestAudioFocus(null, AudioManager.STREAM_MUSIC, gain);
+        }
+        JSObject r = new JSObject();
+        r.put("granted", res == AudioManager.AUDIOFOCUS_REQUEST_GRANTED);
+        call.resolve(r);
+    }
+
+    @PluginMethod
+    public void release(PluginCall call) {
+        if (Build.VERSION.SDK_INT >= 26) { if (req != null) am().abandonAudioFocusRequest(req); }
+        else am().abandonAudioFocus(null);
+        req = null;
+        call.resolve();
+    }
+}
+JAVA
+
 cat > "$MAIN" <<JAVA
 package $PKG;
 
@@ -54,6 +108,7 @@ import com.getcapacitor.BridgeActivity;
 public class MainActivity extends BridgeActivity {
     @Override
     public void onCreate(Bundle savedInstanceState) {
+        registerPlugin(AudioFocusPlugin.class);
         super.onCreate(savedInstanceState);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         this.bridge.getWebView().getSettings().setMediaPlaybackRequiresUserGesture(false);

@@ -7,7 +7,7 @@ import { loadLandmarks, loadRoads, finalizeScores, KIND_HE } from './data.js';
 import { Orientation } from './orientation.js';
 import { REGIONS } from './regions.js';
 
-const VERSION = '0.28';
+const VERSION = '0.29';
 const $ = (id) => document.getElementById(id);
 const video = $('video');
 const canvas = $('overlay');
@@ -15,7 +15,7 @@ const ctx = canvas.getContext('2d');
 
 // ---------------- persisted settings ----------------
 const SETTINGS_KEY = 'ma-roim:settings:v1';
-const defaults = { fov: 66, density: 1, showHidden: false, showSkyline: true, showRoads: true, showPrayer: true, showCompass: true, narrate: false, musicMode: 'pause', driveMode: true, autoAlign: true, headingOffset: 0, pitchOffset: 0, rollOffset: 0 };
+const defaults = { fov: 66, density: 1, showHidden: false, showSkyline: true, showRoads: true, showPrayer: true, showCompass: true, narrate: false, narrateEvery: 'normal', musicMode: 'pause', driveMode: true, autoAlign: true, headingOffset: 0, pitchOffset: 0, rollOffset: 0 };
 function loadSettings() {
   try { return { ...defaults, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}') }; } catch { return { ...defaults }; }
 }
@@ -200,7 +200,13 @@ function updateDrive(gpsHeading, speed) {
 // Each place is said once per trip (3 hours), at most one message every 25 s.
 const spoken = new Map(); // id -> time said
 let lastSpokenAt = 0;
-const SPEAK_GAP = 25000, REPEAT_AFTER = 3 * 3600e3;
+const REPEAT_AFTER = 3 * 3600e3;
+// How chatty: minimum time between messages, and how notable a place must be.
+const NARRATE_LEVELS = {
+  rare: { gap: 8 * 60000, minScore: 150 },   // only the very big ones: the Hermon, the Kinneret, big cities
+  normal: { gap: 3 * 60000, minScore: 100 },
+  often: { gap: 60000, minScore: 0 },
+};
 const SETTLEMENT = new Set(['city', 'town', 'village']);
 
 async function speak(text) {
@@ -247,6 +253,7 @@ function pickMessage(now) {
   let view = null;
   for (const p of state.pois) {
     if (p.d == null || !p.visible || p.isHere || !isMajorLandmark(p) || !fresh(p)) continue;
+    if (p.score < (NARRATE_LEVELS[settings.narrateEvery] || NARRATE_LEVELS.normal).minScore) continue;
     const rel = wrapPi(p.brg - state.course), arel = Math.abs(rel) * R2D;
     if (arel > 110 || p.d < 4000 || p.d / 1000 > p.score * 0.4) continue;
     // skip places right on the road ahead: less than 2 km from the line we are driving along
@@ -263,7 +270,8 @@ function pickMessage(now) {
 function narrateTick() {
   if (!settings.narrate || state.mode !== 'live' || state.course == null || !state.obs) return;
   const now = Date.now();
-  if (now - lastSpokenAt < SPEAK_GAP) return;
+  const lvl = NARRATE_LEVELS[settings.narrateEvery] || NARRATE_LEVELS.normal;
+  if (now - lastSpokenAt < lvl.gap) return;
   const m = pickMessage(now);
   if (!m) return;
   spoken.set(`${m.key}:${m.p.id || m.p.name}`, now);
@@ -1339,6 +1347,8 @@ function bindSettings() {
   $('show-prayer').checked = settings.showPrayer;
   $('show-compass').checked = settings.showCompass;
   $('narrate').checked = settings.narrate;
+  $('narrate-every').value = settings.narrateEvery || 'normal';
+  $('narrate-every').onchange = (e) => { settings.narrateEvery = e.target.value; saveSettings(); };
   $('music-mode').value = settings.musicMode || 'pause';
   $('music-mode').onchange = (e) => { settings.musicMode = e.target.value; saveSettings(); };
   $('narrate').onchange = (e) => {

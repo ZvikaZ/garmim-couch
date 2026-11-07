@@ -96,3 +96,12 @@ button.secondary { background: rgba(255,255,255,.12); color: var(--text); }
 .panel ol.steps { padding-inline-start: 20px; line-height: 1.6; font-size: 14px; }
 .panel ol.steps li { margin-bottom: 6px; }
 .tips b { color: var(--text); }
+#drive-chips {
+  position: fixed; z-index: 2; top: calc(env(safe-area-inset-top, 0px) + 38px); inset-inline: 10px;
+  display: flex; gap: 8px; flex-wrap: wrap;
+}
+#drive-chips .chip {
+  border: 1px solid rgba(255,255,255,.35); border-radius: 999px; padding: 5px 12px;
+  font: 700 13px system-ui, sans-serif; color: #fff; background: rgba(0,0,0,.55);
+}
+#drive-chips .chip.on { background: #1f6f43; border-color: #5fd39a; }

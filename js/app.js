@@ -7,7 +7,7 @@ import { loadLandmarks, loadRoads, finalizeScores, KIND_HE } from './data.js';
 import { Orientation } from './orientation.js';
 import { REGIONS } from './regions.js';
 
-const VERSION = '0.23';
+const VERSION = '0.24';
 const $ = (id) => document.getElementById(id);
 const video = $('video');
 const canvas = $('overlay');
@@ -135,6 +135,7 @@ function onPosition(lat, lon, acc, gpsAlt, gpsHeading = null, speed = null) {
   if (!prev || distBearing(prev.lat, prev.lon, lat, lon).d > 15) state.lastFix = { lat, lon, t: Date.now() };
   state.course = speed != null && speed > DRIVE_SPEED && gpsHeading != null && !Number.isNaN(gpsHeading) ? gpsHeading * D2R : null;
   state.speed = speed ?? 0;
+  if (state.speed > DRIVE_SPEED) state.movingUntil = Date.now() + 90000;
   updateDrive(gpsHeading, speed);
   recallCalibration(lat, lon);
   const first = !state.obs;
@@ -274,6 +275,37 @@ function narrateTick() {
 setInterval(narrateTick, 3000);
 window.__narrate = { tick: narrateTick, spoken, resetGap: () => { lastSpokenAt = 0; } }; // tests
 
+// ---------------- driving chips ----------------
+// While moving (by car), two chips under the heading: drive mode and narration, each a toggle.
+function isMoving() { return (state.speed ?? 0) > DRIVE_SPEED || (state.movingUntil ?? 0) > Date.now(); }
+function updateDriveChips() {
+  const show = state.mode === 'live' && isMoving();
+  $('drive-chips').hidden = !show;
+  if (!show) return;
+  const cd = $('chip-drive'), cn = $('chip-narrate');
+  cd.classList.toggle('on', !!settings.driveMode);
+  cd.textContent = settings.driveMode
+    ? (state.drive.active ? '🚗 מצב נסיעה: כיוון לפי הדרך ✕' : '🚗 מצב נסיעה ✕')
+    : '🚗 מצב נסיעה כבוי · להפעלה';
+  cn.classList.toggle('on', !!settings.narrate);
+  cn.textContent = settings.narrate ? '🔊 הקראה ✕' : '🔇 הקראה כבויה · להפעלה';
+}
+$('chip-drive').onclick = () => {
+  settings.driveMode = !settings.driveMode;
+  if (!settings.driveMode) { state.drive.active = false; orient.smoothing = 0.25; }
+  saveSettings();
+  $('drive-mode').checked = settings.driveMode;
+  say(settings.driveMode ? 'מצב נסיעה פעיל: בנסיעה הכיוון נלקח מכיוון הדרך (כשהטלפון מכוון קדימה).' : 'מצב נסיעה כבוי: הכיוון נלקח מהמצפן ומהכיול בלבד.', 4000);
+  updateDriveChips();
+};
+$('chip-narrate').onclick = () => {
+  settings.narrate = !settings.narrate;
+  saveSettings();
+  $('narrate').checked = settings.narrate;
+  if (settings.narrate) speak('הקראה בנסיעה פעילה');
+  updateDriveChips();
+};
+
 // ---------------- camera model ----------------
 function viewSize() { return { W: window.innerWidth, H: window.innerHeight }; }
 
@@ -376,7 +408,7 @@ function render() {
   cands.sort((a, b) => b.rank - a.rank);
   const maxLabels = Math.round(12 * settings.density * Math.sqrt(state.zoom));
 
-  const ROW0 = 52, ROW_H = 40, LABEL_H = 34, MAX_ROWS = 8;
+  const ROW0 = $('drive-chips').hidden ? 52 : 88, ROW_H = 40, LABEL_H = 34, MAX_ROWS = 8;
   const overlaps = (b) => state.placed.some((o) => b.x < o.x + o.w + 6 && b.x + b.w + 6 > o.x && b.y < o.y + o.h + 2 && b.y + b.h + 2 > o.y);
 
   ctx.textAlign = 'center';
@@ -1098,7 +1130,8 @@ function updateHud(q) {
   const lvl = state.calib && performance.now() - state.calib.t < 15000 ? state.calib.level : 'unknown';
   badge.className = `calib-${lvl}`;
   badge.textContent = { good: '✓ מכויל', fair: '≈ כמעט', bad: '✗ לא מכויל', unknown: '' }[lvl];
-  const parts = [state.night ? '🌙 מצב לילה' : '', state.drive.active ? '🚗 כיוון לפי נסיעה' : '', s.gps, s.data || (state.pois.length ? `${state.pois.length} מקומות` : ''), s.dem].filter(Boolean);
+  updateDriveChips();
+  const parts = [state.night ? '🌙 מצב לילה' : '', s.gps, s.data || (state.pois.length ? `${state.pois.length} מקומות` : ''), s.dem].filter(Boolean);
   $('status').textContent = parts.join(' · ');
   $('zoom-label').textContent = state.zoom > 1.05 ? `×${state.zoom.toFixed(1)} ✕` : '';
 }

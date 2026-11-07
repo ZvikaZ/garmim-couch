@@ -7,7 +7,7 @@ import { loadLandmarks, loadRoads, finalizeScores, KIND_HE } from './data.js';
 import { Orientation } from './orientation.js';
 import { REGIONS } from './regions.js';
 
-const VERSION = '0.17';
+const VERSION = '0.18';
 const $ = (id) => document.getElementById(id);
 const video = $('video');
 const canvas = $('overlay');
@@ -15,7 +15,7 @@ const ctx = canvas.getContext('2d');
 
 // ---------------- persisted settings ----------------
 const SETTINGS_KEY = 'ma-roim:settings:v1';
-const defaults = { fov: 66, density: 1, showHidden: false, showSkyline: true, showRoads: true, showPrayer: true, driveMode: true, autoAlign: true, headingOffset: 0, pitchOffset: 0, rollOffset: 0 };
+const defaults = { fov: 66, density: 1, showHidden: false, showSkyline: true, showRoads: true, showPrayer: true, showCompass: true, driveMode: true, autoAlign: true, headingOffset: 0, pitchOffset: 0, rollOffset: 0 };
 function loadSettings() {
   try { return { ...defaults, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}') }; } catch { return { ...defaults }; }
 }
@@ -321,6 +321,7 @@ function render() {
     ctx.globalAlpha = 1;
   }
   if (settings.showRoads) drawRoads(project, W, H, overlaps);
+  if (settings.showCompass) drawCompass(project, W, H);
   if (settings.showPrayer) drawPrayer(q, project, W, H);
   drawReticle(q, f, W, H, cx, cy);
   drawRivers(project, W, H, overlaps);
@@ -368,6 +369,38 @@ function drawRoads(project, W, H, overlaps) {
   }
 }
 
+// ---------------- compass points ----------------
+// A compass tape near the bottom of the screen: each tick sits at the screen x of that
+// direction on the horizon. Ticks every 5°, longer every 15°, named every 45°.
+const WINDS = ['צפון', 'צפון-מזרח', 'מזרח', 'דרום-מזרח', 'דרום', 'דרום-מערב', 'מערב', 'צפון-מערב'];
+function drawCompass(project, W, H) {
+  const y = H - 96;
+  ctx.save();
+  const band = ctx.createLinearGradient(0, y - 30, 0, y + 12);
+  band.addColorStop(0, 'rgba(0,0,0,0)'); band.addColorStop(1, 'rgba(0,0,0,0.35)');
+  ctx.fillStyle = band; ctx.fillRect(0, y - 30, W, 42);
+  ctx.strokeStyle = 'rgba(255,255,255,0.7)';
+  ctx.lineWidth = 1;
+  for (let deg = 0; deg < 360; deg += 5) {
+    const pt = project(dirVector(deg * D2R, 0));
+    if (!pt || pt[0] < -40 || pt[0] > W + 40) continue;
+    const x = pt[0];
+    const major = deg % 45 === 0, mid = deg % 15 === 0;
+    const len = major ? 12 : mid ? 7 : 4;
+    ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x, y - len); ctx.stroke();
+    if (major) {
+      ctx.font = '700 13px system-ui, sans-serif';
+      ctx.fillStyle = deg === 0 ? '#ff8a7a' : '#ffffff'; // north in red, like a compass needle
+      ctx.fillText(WINDS[deg / 45], x, y - 16);
+    } else if (mid) {
+      ctx.font = '500 10px system-ui, sans-serif';
+      ctx.fillStyle = 'rgba(255,255,255,0.75)';
+      ctx.fillText(`${deg}°`, x, y - 12);
+    }
+  }
+  ctx.restore();
+}
+
 // ---------------- prayer direction (Jerusalem, the Temple Mount) ----------------
 const TEMPLE_MOUNT = { lat: 31.77806, lon: 35.23536 };
 function drawPrayer(q, project, W, H) {
@@ -399,7 +432,7 @@ function drawPrayer(q, project, W, H) {
     }
     const label = `🧭 כיוון תפילה · ${name} ${fmtKm(d)} ק״מ${seenAt ? ' · נראה מכאן' : ''}`;
     const w = ctx.measureText(label).width + 20;
-    const bx = Math.max(4, Math.min(W - w - 4, x - w / 2)), by = H - 128;
+    const bx = Math.max(4, Math.min(W - w - 4, x - w / 2)), by = H - 168;
     ctx.fillStyle = 'rgba(0, 0, 0, 0.35)'; roundRect(ctx, bx, by, w, 28, 14); ctx.fill();
     ctx.strokeStyle = gold; ctx.lineWidth = 1.5; ctx.setLineDash([]); roundRect(ctx, bx, by, w, 28, 14); ctx.stroke();
     ctx.fillStyle = gold; ctx.fillText(label, bx + w / 2, by + 19);
@@ -1081,6 +1114,8 @@ function bindSettings() {
   $('show-skyline').checked = settings.showSkyline;
   $('show-roads').checked = settings.showRoads;
   $('show-prayer').checked = settings.showPrayer;
+  $('show-compass').checked = settings.showCompass;
+  $('show-compass').onchange = (e) => { settings.showCompass = e.target.checked; saveSettings(); };
   $('show-prayer').onchange = (e) => { settings.showPrayer = e.target.checked; saveSettings(); };
   $('drive-mode').checked = settings.driveMode;
   $('auto-align').checked = settings.autoAlign;

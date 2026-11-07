@@ -7,7 +7,7 @@ import { loadLandmarks, loadRoads, finalizeScores, KIND_HE } from './data.js';
 import { Orientation } from './orientation.js';
 import { REGIONS } from './regions.js';
 
-const VERSION = '0.15';
+const VERSION = '0.16';
 const $ = (id) => document.getElementById(id);
 const video = $('video');
 const canvas = $('overlay');
@@ -15,7 +15,7 @@ const ctx = canvas.getContext('2d');
 
 // ---------------- persisted settings ----------------
 const SETTINGS_KEY = 'ma-roim:settings:v1';
-const defaults = { fov: 66, density: 1, showHidden: false, showSkyline: true, showRoads: true, driveMode: true, autoAlign: true, headingOffset: 0, pitchOffset: 0, rollOffset: 0 };
+const defaults = { fov: 66, density: 1, showHidden: false, showSkyline: true, showRoads: true, showPrayer: true, driveMode: true, autoAlign: true, headingOffset: 0, pitchOffset: 0, rollOffset: 0 };
 function loadSettings() {
   try { return { ...defaults, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}') }; } catch { return { ...defaults }; }
 }
@@ -239,8 +239,9 @@ function render() {
   if (settings.showSkyline && state.skyline) {
     ctx.save();
     if (state.mode === 'demo') drawDemoTerrain(project, W, H);
-    ctx.strokeStyle = 'rgba(255, 211, 77, 0.75)';
-    ctx.lineWidth = 1.5;
+    else if (state.night) drawDemoTerrain(project, W, H, 'rgba(24, 34, 52, 0.72)');
+    ctx.strokeStyle = state.night ? 'rgba(255, 221, 110, 0.95)' : 'rgba(255, 211, 77, 0.75)';
+    ctx.lineWidth = state.night ? 2 : 1.5;
     ctx.beginPath();
     let prev = null;
     const n = state.skyline.length;
@@ -320,6 +321,7 @@ function render() {
     ctx.globalAlpha = 1;
   }
   if (settings.showRoads) drawRoads(project, W, H, overlaps);
+  if (settings.showPrayer) drawPrayer(q, project, W, H);
   drawReticle(q, f, W, H, cx, cy);
   drawRivers(project, W, H, overlaps);
   updateHud(q);
@@ -364,6 +366,44 @@ function drawRoads(project, W, H, overlaps) {
       ctx.fillText(c.r.ref, c.x, box.y + 15);
     }
   }
+}
+
+// ---------------- prayer direction (Jerusalem, the Temple Mount) ----------------
+const TEMPLE_MOUNT = { lat: 31.77806, lon: 35.23536 };
+function drawPrayer(q, project, W, H) {
+  const { d, brg } = distBearing(state.obs.lat, state.obs.lon, TEMPLE_MOUNT.lat, TEMPLE_MOUNT.lon);
+  if (d < 300) return;
+  // sit the marker on the ridge line in that direction (or the horizon)
+  let el = 0;
+  if (state.skyline) el = Math.max(0, state.skyline[Math.round(brg * R2D / state.skyStep) % state.skyline.length]);
+  const pt = project(dirVector(brg, el));
+  const gold = '#ffcf4a';
+  const label = `🕍 כיוון תפילה · ירושלים ${fmtKm(d)} ק״מ`;
+  ctx.font = '700 14px system-ui, sans-serif';
+  if (pt && pt[0] > 10 && pt[0] < W - 10) {
+    const x = pt[0];
+    ctx.save();
+    ctx.strokeStyle = gold; ctx.lineWidth = 2; ctx.setLineDash([6, 6]);
+    ctx.beginPath(); ctx.moveTo(x, Math.max(0, pt[1] - 160)); ctx.lineTo(x, Math.min(H, pt[1] + 160)); ctx.stroke();
+    ctx.restore();
+    ctx.fillStyle = gold; ctx.beginPath(); ctx.arc(x, pt[1], 4, 0, Math.PI * 2); ctx.fill();
+    const w = ctx.measureText(label).width + 16;
+    const bx = Math.max(4, Math.min(W - w - 4, x - w / 2)), by = Math.min(H - 120, pt[1] + 110);
+    ctx.fillStyle = 'rgba(40, 28, 0, 0.75)'; roundRect(ctx, bx, by, w, 26, 13); ctx.fill();
+    ctx.fillStyle = gold; ctx.fillText(label, bx + w / 2, by + 18);
+    return;
+  }
+  // off screen: an arrow on the side to turn towards
+  const { heading } = cameraHeadingPitch(q);
+  const rel = wrapPi(brg - heading);
+  const left = rel < 0;
+  // canvas text is right-to-left: the start of the string is drawn on the right
+  const deg = Math.round(Math.abs(rel) * R2D);
+  const txt = left ? `ירושלים ${deg}° ◀` : `▶ ירושלים ${deg}°`;
+  const w = ctx.measureText(txt).width + 16;
+  const bx = left ? 8 : W - w - 8, by = H / 2 - 13 - 60;
+  ctx.fillStyle = 'rgba(40, 28, 0, 0.7)'; roundRect(ctx, bx, by, w, 26, 13); ctx.fill();
+  ctx.fillStyle = gold; ctx.fillText(txt, bx + w / 2, by + 18);
 }
 
 // ---------------- "what's in the middle?" ----------------
@@ -458,9 +498,9 @@ function drawRivers(project, W, H, overlaps) {
 }
 
 /** Demo mode has no camera: paint the computed ridge line as a silhouette so it looks like a view. */
-function drawDemoTerrain(project, W, H) {
+function drawDemoTerrain(project, W, H, fill = '#3b4a33') {
   const n = state.skyline.length;
-  ctx.fillStyle = '#3b4a33';
+  ctx.fillStyle = fill;
   ctx.beginPath();
   let started = false, prev = null;
   for (let i = 0; i <= n; i++) {
@@ -720,7 +760,7 @@ function autoAlign() {
 // if enabled, nudge the calibration halfway, only when the match is clearly good and modest.
 let lastInteraction = 0;
 function continuousAlignTick() {
-  if (state.mode !== 'live' || gesture || document.visibilityState !== 'visible') return;
+  if (state.mode !== 'live' || gesture || document.visibilityState !== 'visible' || state.night) return;
   if (performance.now() - lastInteraction < 3000) return;
   const r = computeAlign({ rolls: [-1 * D2R, 0, 1 * D2R], scales: [1], rangeX: 0.12, rangeY: 0.1 });
   updateCalibLevel(r);
@@ -870,7 +910,7 @@ function updateHud(q) {
   const lvl = state.calib && performance.now() - state.calib.t < 15000 ? state.calib.level : 'unknown';
   badge.className = `calib-${lvl}`;
   badge.textContent = { good: '✓ מכויל', fair: '≈ כמעט', bad: '✗ לא מכויל', unknown: '' }[lvl];
-  const parts = [state.drive.active ? '🚗 כיוון לפי נסיעה' : '', s.gps, s.data || (state.pois.length ? `${state.pois.length} מקומות` : ''), s.dem].filter(Boolean);
+  const parts = [state.night ? '🌙 מצב לילה' : '', state.drive.active ? '🚗 כיוון לפי נסיעה' : '', s.gps, s.data || (state.pois.length ? `${state.pois.length} מקומות` : ''), s.dem].filter(Boolean);
   $('status').textContent = parts.join(' · ');
   $('zoom-label').textContent = state.zoom > 1.05 ? `×${state.zoom.toFixed(1)}` : '';
 }
@@ -1027,6 +1067,8 @@ function bindSettings() {
   $('show-hidden').checked = settings.showHidden;
   $('show-skyline').checked = settings.showSkyline;
   $('show-roads').checked = settings.showRoads;
+  $('show-prayer').checked = settings.showPrayer;
+  $('show-prayer').onchange = (e) => { settings.showPrayer = e.target.checked; saveSettings(); };
   $('drive-mode').checked = settings.driveMode;
   $('auto-align').checked = settings.autoAlign;
   $('auto-align').onchange = (e) => { settings.autoAlign = e.target.checked; saveSettings(); };
@@ -1109,7 +1151,13 @@ let lastSig = '', sameFor = 0;
 function frameSignature() {
   if (!video.videoWidth) return '';
   probeCtx.drawImage(video, 0, 0, 8, 8);
-  return Array.from(probeCtx.getImageData(0, 0, 8, 8).data).join(',');
+  const px = probeCtx.getImageData(0, 0, 8, 8).data;
+  // night: the picture is too dark to see the landscape -> draw the computed one
+  let lum = 0;
+  for (let i = 0; i < px.length; i += 4) lum += 0.3 * px[i] + 0.59 * px[i + 1] + 0.11 * px[i + 2];
+  lum /= 64;
+  if (lum < 35) state.night = true; else if (lum > 55) state.night = false;
+  return Array.from(px).join(',');
 }
 
 function startCameraWatchdog() {

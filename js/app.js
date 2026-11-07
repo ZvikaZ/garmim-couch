@@ -7,7 +7,7 @@ import { loadLandmarks, loadRoads, finalizeScores, KIND_HE } from './data.js';
 import { Orientation } from './orientation.js';
 import { REGIONS } from './regions.js';
 
-const VERSION = '0.26';
+const VERSION = '0.27';
 const $ = (id) => document.getElementById(id);
 const video = $('video');
 const canvas = $('overlay');
@@ -634,7 +634,7 @@ function lookAt(q, f, W, H, cx, cy) {
   // 1) a labelled place right in the middle (within ~1.5°)?
   let bestP = null, bestA = 1.5 * D2R;
   for (const p of state.pois) {
-    if (p.d == null || !p.visible || p.kind === 'region' || p.d / 1000 > p.score * 0.4 * state.zoom * settings.density * 2) continue;
+    if (p.d == null || p.isHere || !p.visible || p.kind === 'region' || p.d / 1000 > p.score * 0.4 * state.zoom * settings.density * 2) continue;
     const da = Math.hypot(wrapPi(p.brg - az) * Math.cos(el), p.angle - el);
     if (da < bestA) { bestA = da; bestP = p; }
   }
@@ -658,7 +658,8 @@ function lookAt(q, f, W, H, cx, cy) {
     const dd = distBearing(hit.la, hit.lo, p.lat, p.lon).d;
     if (dd < nd) { nd = dd; near = p; }
   }
-  const where = near && nd < Math.max(1500, hit.s * 0.15) ? (nd < 400 ? near.name : `ליד ${near.name}`) : 'שטח פתוח';
+  let where = near && nd < Math.max(1500, hit.s * 0.15) ? (nd < 400 ? near.name : `ליד ${near.name}`) : 'שטח פתוח';
+  if (near?.isHere) where = `בתוך ${near.name}`; // the place you are standing in
   return `${where} · ${fmtKm(hit.s)} ק״מ`;
 }
 

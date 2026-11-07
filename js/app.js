@@ -7,7 +7,7 @@ import { loadLandmarks, loadRoads, finalizeScores, KIND_HE } from './data.js';
 import { Orientation } from './orientation.js';
 import { REGIONS } from './regions.js';
 
-const VERSION = '0.19';
+const VERSION = '0.20';
 const $ = (id) => document.getElementById(id);
 const video = $('video');
 const canvas = $('overlay');
@@ -15,7 +15,7 @@ const ctx = canvas.getContext('2d');
 
 // ---------------- persisted settings ----------------
 const SETTINGS_KEY = 'ma-roim:settings:v1';
-const defaults = { fov: 66, density: 1, showHidden: false, showSkyline: true, showRoads: true, showPrayer: true, showCompass: true, driveMode: true, autoAlign: true, headingOffset: 0, pitchOffset: 0, rollOffset: 0 };
+const defaults = { fov: 66, density: 1, showHidden: false, showSkyline: true, showRoads: true, showPrayer: true, showCompass: true, narrate: false, driveMode: true, autoAlign: true, headingOffset: 0, pitchOffset: 0, rollOffset: 0 };
 function loadSettings() {
   try { return { ...defaults, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}') }; } catch { return { ...defaults }; }
 }
@@ -125,6 +125,16 @@ async function loadAll(force = false) {
 }
 
 function onPosition(lat, lon, acc, gpsAlt, gpsHeading = null, speed = null) {
+  // Course over ground: from the GPS, or from the last two fixes if the GPS gives none.
+  const prev = state.lastFix;
+  if ((gpsHeading == null || Number.isNaN(gpsHeading)) && prev) {
+    const mv = distBearing(prev.lat, prev.lon, lat, lon);
+    const dt = (Date.now() - prev.t) / 1000;
+    if (mv.d > 15 && dt > 0) { gpsHeading = mv.brg * R2D; if (speed == null) speed = mv.d / dt; }
+  }
+  if (!prev || distBearing(prev.lat, prev.lon, lat, lon).d > 15) state.lastFix = { lat, lon, t: Date.now() };
+  state.course = speed != null && speed > DRIVE_SPEED && gpsHeading != null && !Number.isNaN(gpsHeading) ? gpsHeading * D2R : null;
+  state.speed = speed ?? 0;
   updateDrive(gpsHeading, speed);
   recallCalibration(lat, lon);
   const first = !state.obs;
@@ -167,6 +177,64 @@ function updateDrive(gpsHeading, speed) {
   settings.headingOffset = wrapPi(settings.headingOffset + k * wrapPi(target - settings.headingOffset));
   dr.active = true;
 }
+
+// ---------------- spoken narration while driving ----------------
+// Every few seconds, while moving, pick the most notable visible place to the side or ahead
+// that has not been mentioned recently, and say it: "משמאל, הר החרמון, 45 קילומטר".
+// Left/right comes from the direction of travel, so the phone can sit anywhere in the car.
+const spoken = new Map(); // name -> time last said
+let lastSpokenAt = 0;
+const SPEAK_GAP = 30000, REPEAT_AFTER = 20 * 60000;
+
+async function speak(text) {
+  const tts = window.Capacitor?.Plugins?.TextToSpeech;
+  try {
+    if (tts) { await tts.speak({ text, lang: 'he-IL', rate: 1.0, category: 'playback' }); return true; }
+    if ('speechSynthesis' in window) {
+      const u = new SpeechSynthesisUtterance(text);
+      u.lang = 'he-IL';
+      const he = speechSynthesis.getVoices().find((v) => v.lang?.startsWith('he') || v.lang?.startsWith('iw'));
+      if (he) u.voice = he;
+      speechSynthesis.speak(u);
+      return true;
+    }
+  } catch (e) { console.warn('speech failed', e); }
+  return false;
+}
+
+function spokenKm(m) {
+  const km = m / 1000;
+  return km < 10 ? `${km.toFixed(1).replace('.0', '')} קילומטר` : `${Math.round(km)} קילומטר`;
+}
+
+function narrateTick() {
+  if (!settings.narrate || state.mode !== 'live' || state.course == null || !state.obs) return;
+  const now = Date.now();
+  if (now - lastSpokenAt < SPEAK_GAP) return;
+  let best = null;
+  for (const p of state.pois) {
+    if (p.d == null || !p.visible || p.kind === 'junction' || p.kind === 'ruins' || p.kind === 'viewpoint') continue;
+    if (p.score < 55 && p.kind !== 'region') continue;        // only notable places
+    if (p.d < 1500 || p.d / 1000 > p.score * 0.4) continue;    // not the one you're in, not too far
+    const t = spoken.get(p.name);
+    if (t && now - t < REPEAT_AFTER) continue;
+    const rel = wrapPi(p.brg - state.course);
+    if (Math.abs(rel) > 110 * D2R) continue;                   // behind you
+    const rank = p.score / (1 + p.d / 20000) * (p.kind === 'region' ? 0.6 : 1);
+    if (!best || rank > best.rank) best = { p, rel, rank };
+  }
+  if (!best) return;
+  const r = best.rel * R2D;
+  const side = Math.abs(r) < 20 ? 'לפנים' : r < 0 ? 'משמאל' : 'מימין';
+  const text = best.p.kind === 'region' ? `${side}, ${best.p.name}` : `${side}, ${best.p.name}, ${spokenKm(best.p.d)}`;
+  spoken.set(best.p.name, now);
+  lastSpokenAt = now;
+  state.lastSpoken = text;
+  speak(text);
+  say(`🔊 ${text}`, 4000);
+}
+setInterval(narrateTick, 4000);
+window.__narrate = { tick: narrateTick, spoken, resetGap: () => { lastSpokenAt = 0; } }; // tests
 
 // ---------------- camera model ----------------
 function viewSize() { return { W: window.innerWidth, H: window.innerHeight }; }
@@ -1121,6 +1189,11 @@ function bindSettings() {
   $('show-roads').checked = settings.showRoads;
   $('show-prayer').checked = settings.showPrayer;
   $('show-compass').checked = settings.showCompass;
+  $('narrate').checked = settings.narrate;
+  $('narrate').onchange = (e) => {
+    settings.narrate = e.target.checked; saveSettings();
+    if (settings.narrate) speak('הקראה בנסיעה פעילה'); // also unlocks speech on the web (needs a tap)
+  };
   $('show-compass').onchange = (e) => { settings.showCompass = e.target.checked; saveSettings(); };
   $('show-prayer').onchange = (e) => { settings.showPrayer = e.target.checked; saveSettings(); };
   $('drive-mode').checked = settings.driveMode;

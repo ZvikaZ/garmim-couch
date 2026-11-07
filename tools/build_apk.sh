@@ -12,7 +12,7 @@ cat > package.json <<'JSON'
 { "name": "ma-roim-android", "private": true, "version": "0.0.0" }
 JSON
 npm install --no-audit --no-fund @capacitor/core@6.2.0 @capacitor/cli@6.2.0 @capacitor/android@6.2.0 \
-  @capacitor/filesystem@6.0.1 @capacitor/share@6.0.2
+  @capacitor/filesystem@6.0.1 @capacitor/share@6.0.2 @capacitor-community/text-to-speech@4.1.1
 cat > capacitor.config.json <<'JSON'
 {
   "appId": "io.github.zvikaz.maroim",

@@ -7,7 +7,7 @@ import { loadLandmarks, loadRoads, finalizeScores, KIND_HE } from './data.js';
 import { Orientation } from './orientation.js';
 import { REGIONS } from './regions.js';
 
-const VERSION = '0.27';
+const VERSION = '0.28';
 const $ = (id) => document.getElementById(id);
 const video = $('video');
 const canvas = $('overlay');
@@ -15,7 +15,7 @@ const ctx = canvas.getContext('2d');
 
 // ---------------- persisted settings ----------------
 const SETTINGS_KEY = 'ma-roim:settings:v1';
-const defaults = { fov: 66, density: 1, showHidden: false, showSkyline: true, showRoads: true, showPrayer: true, showCompass: true, narrate: false, narrateWhat: { pass: true, ahead: true, view: true }, musicMode: 'pause', driveMode: true, autoAlign: true, headingOffset: 0, pitchOffset: 0, rollOffset: 0 };
+const defaults = { fov: 66, density: 1, showHidden: false, showSkyline: true, showRoads: true, showPrayer: true, showCompass: true, narrate: false, musicMode: 'pause', driveMode: true, autoAlign: true, headingOffset: 0, pitchOffset: 0, rollOffset: 0 };
 function loadSettings() {
   try { return { ...defaults, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}') }; } catch { return { ...defaults }; }
 }
@@ -233,7 +233,7 @@ function spokenKm(m) {
 /** Is this a landmark worth announcing when it comes into view? */
 function isMajorLandmark(p) {
   if (p.kind === 'city') return true;
-  if (p.kind === 'town') return (p.pop ?? 0) >= 15000;
+  if (p.kind === 'town') return (p.pop ?? 0) >= 10000;
   if (p.kind === 'water') return (p.areaKm2 ?? 0) >= 2;
   if (p.kind === 'peak' || p.kind === 'volcano') return (p.ele ?? 0) >= 500 && (p.isoKm ?? 0) >= 8 && !!p.wikidata;
   if (p.kind === 'castle' || p.kind === 'fort') return !!p.wikidata;
@@ -241,32 +241,23 @@ function isMajorLandmark(p) {
 }
 
 function pickMessage(now) {
-  // remembered per kind of message: seeing a city far away and later passing it are both worth saying
-  const fresh = (p, kind) => { const t = spoken.get(`${kind}:${p.id || p.name}`); return !t || now - t > REPEAT_AFTER; };
-  const n = settings.narrateWhat || {};
-  let pass = null, ahead = null, view = null;
+  // Only what is worth looking up from the road: landmarks out there, not the places along
+  // the road itself (those you see anyway, on the signs and on the map).
+  const fresh = (p) => { const t = spoken.get(`view:${p.id || p.name}`); return !t || now - t > REPEAT_AFTER; };
+  let view = null;
   for (const p of state.pois) {
-    if (p.d == null) continue;
+    if (p.d == null || !p.visible || p.isHere || !isMajorLandmark(p) || !fresh(p)) continue;
     const rel = wrapPi(p.brg - state.course), arel = Math.abs(rel) * R2D;
-    if (n.pass !== false && fresh(p, 'pass') && SETTLEMENT.has(p.kind) && p.d < 2500 && p.d > 200 && arel > 45 && arel < 135) {
-      if (!pass || p.d < pass.p.d) pass = { p, rel };
-    }
-    if (n.ahead !== false && fresh(p, 'ahead') && SETTLEMENT.has(p.kind) && p.kind !== 'village' && p.d < 8000 && p.d > 1500 && arel < 15) {
-      if (!ahead || p.d < ahead.p.d) ahead = { p, rel };
-    }
-    if (n.view !== false && fresh(p, 'view') && p.visible && isMajorLandmark(p) && arel < 110 && p.d > 3000 && p.d / 1000 < p.score * 0.4) {
-      const rank = p.score / (1 + p.d / 30000);
-      if (!view || rank > view.rank) view = { p, rel, rank };
-    }
+    if (arel > 110 || p.d < 4000 || p.d / 1000 > p.score * 0.4) continue;
+    // skip places right on the road ahead: less than 2 km from the line we are driving along
+    if (arel < 90 && p.d * Math.sin(Math.abs(rel)) < 2000) continue;
+    const rank = p.score / (1 + p.d / 30000);
+    if (!view || rank > view.rank) view = { p, rel, rank };
   }
-  const side = (rel) => (rel < 0 ? 'משמאל' : 'מימין');
-  if (pass) return { key: 'pass', p: pass.p, text: `עוברים ליד ${pass.p.name}, ${side(pass.rel)}` };
-  if (ahead) return { key: 'ahead', p: ahead.p, text: `לפנים: ${ahead.p.name}, ${spokenKm(ahead.p.d)}` };
-  if (view) {
-    const where = Math.abs(view.rel) * R2D < 20 ? 'לפנים' : side(view.rel);
-    return { key: 'view', p: view.p, text: `${where}: ${view.p.name}, ${spokenKm(view.p.d)}` };
-  }
-  return null;
+  if (!view) return null;
+  const r = view.rel * R2D;
+  const where = Math.abs(r) < 20 ? 'לפנים' : r < 0 ? 'משמאל' : 'מימין';
+  return { key: 'view', p: view.p, text: `${where}: ${view.p.name}, ${spokenKm(view.p.d)}` };
 }
 
 function narrateTick() {
@@ -683,33 +674,34 @@ function drawReticle(q, f, W, H, cx, cy) {
   ctx.fillText(centerInfo.text, x, y + 40);
 }
 
-/** River names: one label per river, on its nearest visible stretch. */
+/** River names: one label per river, on its nearest visible stretch that is on screen. */
 function drawRivers(project, W, H, overlaps) {
-  const reachM = 8000 * state.zoom * settings.density;
+  const reachM = 12000 * state.zoom * settings.density;
   const best = new Map();
   for (const r of state.rivers) {
     if (r.d == null || r.d < 200 || r.d > reachM || !r.visible) continue;
     const cur = best.get(r.ref);
-    if (cur && cur.d <= r.d) continue;
-    best.set(r.ref, r);
+    if (cur && cur.r.d <= r.d) continue;
+    const pt = project(dirVector(r.brg, r.angle));
+    if (!pt || pt[0] < 20 || pt[0] > W - 20 || pt[1] < 60 || pt[1] > H - 110) continue;
+    best.set(r.ref, { r, pt });
   }
-  const maxRivers = Math.round(3 * Math.sqrt(state.zoom) * settings.density);
+  const maxRivers = Math.round(4 * Math.sqrt(state.zoom) * settings.density);
   let n = 0;
   ctx.font = 'italic 600 13px system-ui, sans-serif';
-  for (const r of [...best.values()].sort((a, b) => a.d - b.d)) {
+  for (const { r, pt } of [...best.values()].sort((a, b) => a.r.d - b.r.d)) {
     if (n >= maxRivers) break;
-    const pt = project(dirVector(r.brg, r.angle));
-    if (!pt || pt[0] < 20 || pt[0] > W - 20 || pt[1] < 60 || pt[1] > H - 80) continue;
-    const w = ctx.measureText(r.name).width + 10;
-    const box = { x: pt[0] - w / 2, y: pt[1] - 24, w, h: 20 };
+    const text = `〰 ${r.name} · ${fmtKm(r.d)}`;
+    const w = ctx.measureText(text).width + 12;
+    const box = { x: Math.max(4, Math.min(W - w - 4, pt[0] - w / 2)), y: pt[1] - 24, w, h: 20 };
     if (overlaps(box)) continue;
     box.p = r;
     state.placed.push(box);
     n++;
-    ctx.fillStyle = 'rgba(0,30,60,0.55)';
+    ctx.fillStyle = 'rgba(0,30,60,0.6)';
     roundRect(ctx, box.x, box.y, box.w, box.h, 6); ctx.fill();
     ctx.fillStyle = '#7fd8ff';
-    ctx.fillText(r.name, pt[0], box.y + 15);
+    ctx.fillText(text, box.x + box.w / 2, box.y + 15);
     ctx.beginPath(); ctx.arc(pt[0], pt[1], 2.5, 0, Math.PI * 2); ctx.fill();
   }
 }
@@ -1347,11 +1339,6 @@ function bindSettings() {
   $('show-prayer').checked = settings.showPrayer;
   $('show-compass').checked = settings.showCompass;
   $('narrate').checked = settings.narrate;
-  for (const k of ['pass', 'ahead', 'view']) {
-    const el = $(`narrate-${k}`);
-    el.checked = (settings.narrateWhat || {})[k] !== false;
-    el.onchange = () => { settings.narrateWhat = { ...(settings.narrateWhat || {}), [k]: el.checked }; saveSettings(); };
-  }
   $('music-mode').value = settings.musicMode || 'pause';
   $('music-mode').onchange = (e) => { settings.musicMode = e.target.value; saveSettings(); };
   $('narrate').onchange = (e) => {

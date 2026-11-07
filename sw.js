@@ -1,7 +1,7 @@
 // Offline support: app shell is cached; elevation tiles are cached as they are used.
 const SHELL = 'ma-roim-shell-v2';
 const TILES = 'ma-roim-tiles-v1';
-const FILES = ['./', 'index.html', 'style.css', 'manifest.webmanifest', 'icon.svg',
+const FILES = ['./', 'index.html', 'style.css', 'manifest.webmanifest', 'icon-192.png',
   'js/app.js', 'js/geo.js', 'js/dem.js', 'js/data.js', 'js/orientation.js'];
 
 self.addEventListener('install', (e) => {

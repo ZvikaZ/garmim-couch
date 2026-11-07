@@ -5,7 +5,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 WORK="$ROOT/build/android-app"
 rm -rf "$WORK" && mkdir -p "$WORK/www"
-cp -r "$ROOT/index.html" "$ROOT/style.css" "$ROOT/js" "$ROOT/data" "$ROOT/icon.svg" "$ROOT/manifest.webmanifest" "$WORK/www/"
+cp -r "$ROOT/index.html" "$ROOT/style.css" "$ROOT/js" "$ROOT/data" "$ROOT/icon-192.png" "$ROOT/icon-512.png" "$ROOT/manifest.webmanifest" "$WORK/www/"
 
 cd "$WORK"
 cat > package.json <<'JSON'
@@ -115,6 +115,28 @@ public class MainActivity extends BridgeActivity {
     }
 }
 JAVA
+
+# App icon (assets/icon, made from assets/icon/icon-1024.png)
+RES=android/app/src/main/res
+for d in mdpi hdpi xhdpi xxhdpi xxxhdpi; do
+  cp "$ROOT/assets/icon/mipmap-$d/"*.png "$RES/mipmap-$d/"
+done
+mkdir -p "$RES/mipmap-anydpi-v26" "$RES/values"
+for n in ic_launcher ic_launcher_round; do
+cat > "$RES/mipmap-anydpi-v26/$n.xml" <<'XML'
+<?xml version="1.0" encoding="utf-8"?>
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@color/ic_launcher_background"/>
+    <foreground android:drawable="@mipmap/ic_launcher_foreground"/>
+</adaptive-icon>
+XML
+done
+cat > "$RES/values/ic_launcher_background.xml" <<'XML'
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="ic_launcher_background">#0E2240</color>
+</resources>
+XML
 
 cd android
 chmod +x gradlew

@@ -7,7 +7,7 @@ import { loadLandmarks, loadRoads, finalizeScores, KIND_HE } from './data.js';
 import { Orientation } from './orientation.js';
 import { REGIONS } from './regions.js';
 
-const VERSION = '0.16';
+const VERSION = '0.17';
 const $ = (id) => document.getElementById(id);
 const video = $('video');
 const canvas = $('overlay');
@@ -372,25 +372,37 @@ function drawRoads(project, W, H, overlaps) {
 const TEMPLE_MOUNT = { lat: 31.77806, lon: 35.23536 };
 function drawPrayer(q, project, W, H) {
   const { d, brg } = distBearing(state.obs.lat, state.obs.lon, TEMPLE_MOUNT.lat, TEMPLE_MOUNT.lon);
-  if (d < 300) return;
-  // sit the marker on the ridge line in that direction (or the horizon)
-  let el = 0;
-  if (state.skyline) el = Math.max(0, state.skyline[Math.round(brg * R2D / state.skyStep) % state.skyline.length]);
-  const pt = project(dirVector(brg, el));
+  if (d < 150) return;
+  // In and around Jerusalem the direction is to the Temple Mount itself.
+  const name = d < 25000 ? 'הר הבית' : 'ירושלים';
   const gold = '#ffcf4a';
-  const label = `🕍 כיוון תפילה · ירושלים ${fmtKm(d)} ק״מ`;
+  // Close enough to really see it? Then it is also a place on the landscape.
+  let seenAt = null;
+  if (d < 8000 && state.dem.ready) {
+    const g = state.dem.elevation(TEMPLE_MOUNT.lat, TEMPLE_MOUNT.lon);
+    const h = (Number.isNaN(g) ? 740 : g) + 20;
+    if (lineOfSight(state.dem, state.obs, TEMPLE_MOUNT, h, d, brg).clearance > -0.003) seenAt = project(dirVector(brg, elevationAngle(h - state.obs.h, d)));
+  }
+  const pt = project(dirVector(brg, 0));
   ctx.font = '700 14px system-ui, sans-serif';
   if (pt && pt[0] > 10 && pt[0] < W - 10) {
     const x = pt[0];
+    // A direction, not a thing you see: a dashed line through the whole view,
+    // and an outlined (not filled) chip at the bottom.
     ctx.save();
-    ctx.strokeStyle = gold; ctx.lineWidth = 2; ctx.setLineDash([6, 6]);
-    ctx.beginPath(); ctx.moveTo(x, Math.max(0, pt[1] - 160)); ctx.lineTo(x, Math.min(H, pt[1] + 160)); ctx.stroke();
+    ctx.strokeStyle = 'rgba(255, 207, 74, 0.8)'; ctx.lineWidth = 2; ctx.setLineDash([3, 9]);
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
     ctx.restore();
-    ctx.fillStyle = gold; ctx.beginPath(); ctx.arc(x, pt[1], 4, 0, Math.PI * 2); ctx.fill();
-    const w = ctx.measureText(label).width + 16;
-    const bx = Math.max(4, Math.min(W - w - 4, x - w / 2)), by = Math.min(H - 120, pt[1] + 110);
-    ctx.fillStyle = 'rgba(40, 28, 0, 0.75)'; roundRect(ctx, bx, by, w, 26, 13); ctx.fill();
-    ctx.fillStyle = gold; ctx.fillText(label, bx + w / 2, by + 18);
+    if (seenAt) {
+      ctx.fillStyle = gold; ctx.beginPath(); ctx.arc(seenAt[0], seenAt[1], 5, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = '#000'; ctx.lineWidth = 1; ctx.stroke();
+    }
+    const label = `🧭 כיוון תפילה · ${name} ${fmtKm(d)} ק״מ${seenAt ? ' · נראה מכאן' : ''}`;
+    const w = ctx.measureText(label).width + 20;
+    const bx = Math.max(4, Math.min(W - w - 4, x - w / 2)), by = H - 128;
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.35)'; roundRect(ctx, bx, by, w, 28, 14); ctx.fill();
+    ctx.strokeStyle = gold; ctx.lineWidth = 1.5; ctx.setLineDash([]); roundRect(ctx, bx, by, w, 28, 14); ctx.stroke();
+    ctx.fillStyle = gold; ctx.fillText(label, bx + w / 2, by + 19);
     return;
   }
   // off screen: an arrow on the side to turn towards
@@ -399,11 +411,12 @@ function drawPrayer(q, project, W, H) {
   const left = rel < 0;
   // canvas text is right-to-left: the start of the string is drawn on the right
   const deg = Math.round(Math.abs(rel) * R2D);
-  const txt = left ? `ירושלים ${deg}° ◀` : `▶ ירושלים ${deg}°`;
-  const w = ctx.measureText(txt).width + 16;
-  const bx = left ? 8 : W - w - 8, by = H / 2 - 13 - 60;
-  ctx.fillStyle = 'rgba(40, 28, 0, 0.7)'; roundRect(ctx, bx, by, w, 26, 13); ctx.fill();
-  ctx.fillStyle = gold; ctx.fillText(txt, bx + w / 2, by + 18);
+  const txt = left ? `🧭 ${name} ${deg}° ◀` : `▶ ${name} ${deg}° 🧭`;
+  const w = ctx.measureText(txt).width + 20;
+  const bx = left ? 8 : W - w - 8, by = H / 2 - 74;
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.35)'; roundRect(ctx, bx, by, w, 28, 14); ctx.fill();
+  ctx.strokeStyle = gold; ctx.lineWidth = 1.5; roundRect(ctx, bx, by, w, 28, 14); ctx.stroke();
+  ctx.fillStyle = gold; ctx.fillText(txt, bx + w / 2, by + 19);
 }
 
 // ---------------- "what's in the middle?" ----------------

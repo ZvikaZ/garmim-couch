@@ -7,7 +7,7 @@ import { loadLandmarks, loadRoads, finalizeScores, KIND_HE } from './data.js';
 import { Orientation } from './orientation.js';
 import { REGIONS } from './regions.js';
 
-const VERSION = '0.24';
+const VERSION = '0.25';
 const $ = (id) => document.getElementById(id);
 const video = $('video');
 const canvas = $('overlay');
@@ -280,15 +280,14 @@ window.__narrate = { tick: narrateTick, spoken, resetGap: () => { lastSpokenAt =
 function isMoving() { return (state.speed ?? 0) > DRIVE_SPEED || (state.movingUntil ?? 0) > Date.now(); }
 function updateDriveChips() {
   const show = state.mode === 'live' && isMoving();
-  $('drive-chips').hidden = !show;
-  if (!show) return;
   const cd = $('chip-drive'), cn = $('chip-narrate');
+  cd.hidden = cn.hidden = !show;
+  if (!show) return;
   cd.classList.toggle('on', !!settings.driveMode);
-  cd.textContent = settings.driveMode
-    ? (state.drive.active ? '🚗 מצב נסיעה: כיוון לפי הדרך ✕' : '🚗 מצב נסיעה ✕')
-    : '🚗 מצב נסיעה כבוי · להפעלה';
+  cd.title = settings.driveMode ? 'מצב נסיעה פעיל' : 'מצב נסיעה כבוי';
   cn.classList.toggle('on', !!settings.narrate);
-  cn.textContent = settings.narrate ? '🔊 הקראה ✕' : '🔇 הקראה כבויה · להפעלה';
+  cn.querySelector('span').textContent = settings.narrate ? '🔊' : '🔇';
+  cn.title = settings.narrate ? 'הקראה פועלת' : 'הקראה כבויה';
 }
 $('chip-drive').onclick = () => {
   settings.driveMode = !settings.driveMode;
@@ -408,7 +407,7 @@ function render() {
   cands.sort((a, b) => b.rank - a.rank);
   const maxLabels = Math.round(12 * settings.density * Math.sqrt(state.zoom));
 
-  const ROW0 = $('drive-chips').hidden ? 52 : 88, ROW_H = 40, LABEL_H = 34, MAX_ROWS = 8;
+  const ROW0 = 52, ROW_H = 40, LABEL_H = 34, MAX_ROWS = 8;
   const overlaps = (b) => state.placed.some((o) => b.x < o.x + o.w + 6 && b.x + b.w + 6 > o.x && b.y < o.y + o.h + 2 && b.y + b.h + 2 > o.y);
 
   ctx.textAlign = 'center';

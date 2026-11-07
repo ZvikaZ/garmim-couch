@@ -99,3 +99,8 @@ button.secondary { background: rgba(255,255,255,.12); color: var(--text); }
 #toolbar button.tool.toggle.on { background: #1f6f43; box-shadow: 0 0 0 1.5px #5fd39a inset; }
 #toolbar button.tool.toggle.on small { color: #d8f5e6; }
 #toolbar button.tool.toggle:not(.on) span { opacity: .55; }
+#uncert { font-size: 12px; font-weight: 700; padding: 1px 6px; border-radius: 8px; margin-inline-start: 6px; }
+#uncert:empty { display: none; }
+.u-good { background: #1f8a4c; color: #fff; }
+.u-fair { background: #b8860b; color: #fff; }
+.u-bad { background: #b3261e; color: #fff; }

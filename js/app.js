@@ -7,7 +7,7 @@ import { loadLandmarks, loadRoads, finalizeScores, KIND_HE } from './data.js';
 import { Orientation } from './orientation.js';
 import { REGIONS } from './regions.js';
 
-const VERSION = '0.25';
+const VERSION = '0.26';
 const $ = (id) => document.getElementById(id);
 const video = $('video');
 const canvas = $('overlay');
@@ -94,6 +94,15 @@ function recomputeGeometry() {
     r.angle = elevationAngle(r.h - obs.h, d);
     r.visible = haveDem && d > 300 ? lineOfSight(state.dem, obs, r, r.h, d, brg).clearance > -0.002 : true;
   }
+  // The settlement you are in is not something you look at: show it as "you are in", not a label.
+  const HERE_M = { city: 3500, town: 2000, village: 1000, hamlet: 700 };
+  state.here = null;
+  for (const p of state.pois) {
+    p.isHere = false;
+    const r = HERE_M[p.kind];
+    if (r && p.d < r && (!state.here || p.d / r < state.here.d / HERE_M[state.here.kind])) state.here = p;
+  }
+  if (state.here) state.here.isHere = true;
   state.skyline = haveDem ? computeSkyline(state.dem, obs, state.skyStep) : null;
   state.lastGeomAt = { lat: obs.lat, lon: obs.lon };
 }
@@ -275,6 +284,16 @@ function narrateTick() {
 setInterval(narrateTick, 3000);
 window.__narrate = { tick: narrateTick, spoken, resetGap: () => { lastSpokenAt = 0; } }; // tests
 
+// ---------------- how sure are we about the direction? ----------------
+// A rough 1-sigma heading error, in degrees, from what the direction is based on.
+function headingUncertainty() {
+  const now = performance.now();
+  if (state.calib?.level === 'good' && now - state.calib.t < 30000) return 0.5;     // the camera confirms
+  if (now - orient.lockedAt < 15 * 60000) return Math.min(10, 1 + 0.3 * (now - orient.lockedAt) / 60000); // calibrated, gyro drifts
+  if (state.drive.active) return 4;                                                     // from the road direction
+  return 10;                                                                            // phone compass only
+}
+
 // ---------------- driving chips ----------------
 // While moving (by car), two chips under the heading: drive mode and narration, each a toggle.
 function isMoving() { return (state.speed ?? 0) > DRIVE_SPEED || (state.movingUntil ?? 0) > Date.now(); }
@@ -397,7 +416,7 @@ function render() {
   const reach = 0.4 * state.zoom * settings.density; // km per score point
   const cands = [];
   for (const p of state.pois) {
-    if (p.d == null || p.d < (p.kind === 'region' ? 4000 : 150)) continue;
+    if (p.d == null || p.isHere || p.d < (p.kind === 'region' ? 4000 : 150)) continue;
     if (!p.visible && !settings.showHidden) continue;
     if (p.d / 1000 > p.score * reach) continue;
     const pt = project(dirVector(p.brg, p.angle));
@@ -412,6 +431,7 @@ function render() {
 
   ctx.textAlign = 'center';
   ctx.direction = 'rtl';
+  const errPx = Math.min(90, f * Math.tan(headingUncertainty() * D2R));
   for (const c of cands) {
     if (state.placed.length >= maxLabels) break;
     const st = KIND_STYLE[c.p.kind] || KIND_STYLE.village;
@@ -446,6 +466,13 @@ function render() {
     ctx.stroke();
     ctx.fillStyle = st.color;
     ctx.beginPath(); ctx.arc(c.x, c.y, 3, 0, Math.PI * 2); ctx.fill();
+    if (errPx > 6) {
+      // error bar: where the place may really be, left or right of the dot
+      ctx.strokeStyle = 'rgba(255,255,255,0.4)'; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.moveTo(c.x - errPx, c.y); ctx.lineTo(c.x + errPx, c.y);
+      ctx.moveTo(c.x - errPx, c.y - 4); ctx.lineTo(c.x - errPx, c.y + 4);
+      ctx.moveTo(c.x + errPx, c.y - 4); ctx.lineTo(c.x + errPx, c.y + 4); ctx.stroke();
+    }
     // box
     ctx.fillStyle = 'rgba(0,0,0,0.5)';
     roundRect(ctx, box.x, box.y, box.w, box.h, 8); ctx.fill();
@@ -1056,17 +1083,28 @@ async function captureDebug() {
     scr: screen.orientation?.angle ?? 0, drive: state.drive.active, speed: state.drive.speed,
     calib: state.calib?.level, fit: fit && !fit.error ? { sx: r3(fit.sx), sy: r3(fit.sy), roll: r3(fit.roll), conf: r3(fit.conf), off: r3(fit.offDeg) } : fit?.error,
   };
+  // image: what the screen showed (camera + labels) on the left, the raw camera frame on the
+  // right (for replaying the calibration), and the data as text underneath.
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const sw = Math.round(W * dpr), sh = Math.round(H * dpr);
+  const rawH = sh, rawW = Math.round(vw * sh / vh);
+  meta.layout = { screen: [0, 0, sw, sh], raw: [sw + 8, 0, rawW, rawH], rawScale: vh / sh };
   const json = JSON.stringify(meta);
-  // image: full camera frame + text strip
-  const lines = json.match(/.{1,110}/g) || [];
-  const fs = Math.max(14, Math.round(vw / 90)), lh = Math.round(fs * 1.3);
+  const lines = json.match(/.{1,140}/g) || [];
+  const fs = 16, lh = 21;
   const c = document.createElement('canvas');
-  c.width = vw; c.height = vh + lines.length * lh + 10;
+  c.width = sw + 8 + rawW; c.height = sh + lines.length * lh + 12;
   const g = c.getContext('2d');
-  g.drawImage(video, 0, 0, vw, vh);
-  g.fillStyle = '#fff'; g.fillRect(0, vh, vw, c.height - vh);
+  g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height);
+  // screen view: the video as displayed (object-fit: cover, zoom), then the overlay canvas
+  const sc = Math.max(W / vw, H / vh) * state.zoom;
+  g.save(); g.beginPath(); g.rect(0, 0, sw, sh); g.clip();
+  g.drawImage(video, (W - vw * sc) / 2 * dpr, (H - vh * sc) / 2 * dpr, vw * sc * dpr, vh * sc * dpr);
+  g.drawImage(canvas, 0, 0, sw, sh);
+  g.restore();
+  g.drawImage(video, sw + 8, 0, rawW, rawH);
   g.fillStyle = '#000'; g.font = `${fs}px monospace`; g.direction = 'ltr'; g.textAlign = 'left';
-  lines.forEach((l, i) => g.fillText(l, 6, vh + (i + 1) * lh));
+  lines.forEach((l, i) => g.fillText(l, 6, sh + (i + 1) * lh));
   const blob = await new Promise((res) => c.toBlob(res, 'image/jpeg', 0.9));
   const bytes = jpegWithComment(new Uint8Array(await blob.arrayBuffer()), json);
   const name = `ma-roim-${meta.t.replace(/[:.]/g, '-')}.jpg`;
@@ -1125,12 +1163,17 @@ function updateHud(q) {
     $('heading').textContent = state.obs ? 'ממתין לחיישני כיוון…' : 'ממתין למיקום…';
   }
   const s = state.status;
+  const u = headingUncertainty();
+  const ue = $('uncert');
+  ue.textContent = `±${u < 1 ? u.toFixed(1) : Math.round(u)}°`;
+  ue.className = u <= 1.5 ? 'u-good' : u <= 5 ? 'u-fair' : 'u-bad';
+  ue.title = 'כמה מעלות השמות עלולים לזוז ימינה או שמאלה';
   const badge = $('calib-badge');
   const lvl = state.calib && performance.now() - state.calib.t < 15000 ? state.calib.level : 'unknown';
   badge.className = `calib-${lvl}`;
   badge.textContent = { good: '✓ מכויל', fair: '≈ כמעט', bad: '✗ לא מכויל', unknown: '' }[lvl];
   updateDriveChips();
-  const parts = [state.night ? '🌙 מצב לילה' : '', s.gps, s.data || (state.pois.length ? `${state.pois.length} מקומות` : ''), s.dem].filter(Boolean);
+  const parts = [state.here ? `📍 ${state.here.name}` : '', state.night ? '🌙 מצב לילה' : '', s.gps, s.data || (state.pois.length ? `${state.pois.length} מקומות` : ''), s.dem].filter(Boolean);
   $('status').textContent = parts.join(' · ');
   $('zoom-label').textContent = state.zoom > 1.05 ? `×${state.zoom.toFixed(1)} ✕` : '';
 }

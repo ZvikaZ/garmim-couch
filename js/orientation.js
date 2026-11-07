@@ -40,6 +40,9 @@ export class Orientation {
   /** Call after a calibration: from now on, follow the gyro and mostly ignore the compass. */
   lock() { this.lockedAt = performance.now(); }
 
+  /** Forget the calibration lock and take north from the compass again, right away. */
+  unlock() { this.lockedAt = -Infinity; this.delta = null; }
+
   _emit(target, alpha) {
     this.q = this.q ? qslerp(this.q, target, alpha) : target;
     this.lastUpdate = performance.now();

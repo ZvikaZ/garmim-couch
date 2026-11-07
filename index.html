@@ -19,10 +19,11 @@
   </div>
 
   <div id="toolbar" hidden>
-    <button id="btn-settings" aria-label="הגדרות">⚙</button>
-    <button id="btn-calib" aria-label="איפוס כיול">⟲</button>
-    <button id="btn-align" aria-label="יישור אוטומטי">🎯</button>
-    <div id="zoom-label"></div>
+    <button id="btn-settings" class="tool" aria-label="הגדרות"><span>⚙</span><small>הגדרות</small></button>
+    <button id="btn-calib" class="tool" aria-label="חזרה למצב רגיל"><span>⟲</span><small>איפוס</small></button>
+    <button id="btn-align" class="tool" aria-label="יישור אוטומטי"><span>🎯</span><small>יישור</small></button>
+    <button id="zoom-label" aria-label="ביטול זום"></button>
+  </div>
   </div>
 
   <div id="calib-hint" hidden>גרור את התמונה ימינה/שמאלה עד שקו הרכס הצהוב יושב על הרכס האמיתי</div>
@@ -33,12 +34,14 @@
     <button id="btn-start" class="primary">התחל</button>
     <ul class="tips">
       <li>צריך הרשאה למצלמה, למיקום ולחיישני התנועה.</li>
-      <li>הקו הצהוב הוא קו הרכס המחושב. אם הוא לא יושב על הרכס האמיתי, גרור את המסך עד שהוא יושב. התיקון נשמר.</li>
-      <li>צביטה עם שתי אצבעות: זום, ובזום מופיעים גם מקומות קטנים יותר.</li>
-      <li>🎯 מיישר אוטומטית את הקו הצהוב לרכס שבתמונה. הכיול נשמר לכל מקום.</li>
-      <li>⌖ הכוונת במרכז אומרת מה נמצא בדיוק שם.</li>
-      <li>⟲ מאפס את הכיול.</li>
-      <li>לחיצה על תווית: פרטים וזמן נסיעה.</li>
+      <li><b>הקו הצהוב</b> הוא קו הרכס לפי המפה הטופוגרפית. כשהוא יושב על הרכס האמיתי, כל השמות במקום הנכון.</li>
+      <li><b>🎯 יישור:</b> האפליקציה מחפשת את הרכס בתמונה ומזיזה אליו את הקו הצהוב. ליד הכיוון למעלה מופיע ✓ כשהקו מתאים.</li>
+      <li><b>גרירה באצבע:</b> כיול ידני, רק אם הקו הצהוב לא על הרכס ו-🎯 לא הצליח. גוררים עד שהקו על הרכס. התיקון נשמר למקום הזה.</li>
+      <li><b>צביטה בשתי אצבעות:</b> זום. בזום מופיעים גם מקומות קטנים. לחיצה על ✕ ליד מספר הזום מבטלת אותו.</li>
+      <li><b>⟲ איפוס:</b> חזרה למצב רגיל. מבטל זום, מבטל כל כיול ידני או אוטומטי, והכיוון נלקח שוב מהמצפן.</li>
+      <li><b>⚙ הגדרות:</b> מה להציג, הקראה בנסיעה, ושליחת דיווח כשמשהו לא נכון.</li>
+      <li><b>⌖ הכוונת</b> במרכז אומרת מה נמצא בדיוק שם. <b>לחיצה על תווית</b> מציגה פרטים וזמן נסיעה.</li>
+      <li><b>הסרגל למטה</b> הוא מצפן: רוחות השמיים, והכיוון לירושלים בזהב.</li>
     </ul>
     <p class="credit">נתונים: © OpenStreetMap contributors · גבהים: AWS Terrain Tiles (SRTM ועוד)</p>
   </section>
@@ -48,17 +51,19 @@
 
     <label>צפיפות תוויות: <output id="density-out"></output>
       <input id="density" type="range" min="0.4" max="2.5" step="0.1">
-      <small>כמה שמות להציג ועד כמה רחוק. הזז שמאלה אם המסך עמוס, ימינה אם חסרים מקומות קטנים.</small>
+      <small>כמה שמות להציג ועד כמה רחוק. מספר קטן יותר: פחות שמות, אם המסך עמוס. מספר גדול יותר: גם מקומות קטנים ורחוקים. (גם זום מוסיף מקומות קטנים.)</small>
     </label>
 
     <label class="row"><input id="show-roads" type="checkbox"> מספרי כבישים</label>
 
     <label class="row"><input id="show-prayer" type="checkbox"> כיוון תפילה לירושלים</label>
+    <small>סימון זהוב בסרגל המצפן למטה. בירושלים ובסביבתה: הר הבית.</small>
 
-    <label class="row"><input id="show-compass" type="checkbox"> רוחות השמיים על קו האופק</label>
+    <label class="row"><input id="show-compass" type="checkbox"> סרגל מצפן למטה</label>
+    <small>רוחות השמיים ומעלות, במקום שבו כל כיוון נמצא על המסך.</small>
 
     <label class="row"><input id="auto-align" type="checkbox"> יישור אוטומטי רציף</label>
-    <small>כל כמה שניות האפליקציה בודקת את הרכס בתמונה ומתקנת את הקו הצהוב קצת, רק כשההתאמה ברורה.</small>
+    <small>כל כמה שניות האפליקציה בודקת את הרכס בתמונה ומזיזה את הקו הצהוב קצת לעברו. רק כשיש רכס ברור מול שמיים, ולא בזמן נסיעה או בלילה.</small>
 
     <label class="row"><input id="narrate" type="checkbox"> 🔊 הקראה בנסיעה</label>
     <small>בנסיעה הטלפון אומר בקול מה רואים. ימין ושמאל נקבעים לפי כיוון הנסיעה, כך שלא צריך לכוון את הטלפון.</small>
@@ -79,7 +84,7 @@
     <small>ברכב המצפן לא אמין. בנסיעה, כשהטלפון מכוון קדימה, הכיוון נלקח מכיוון הנסיעה ב-GPS.</small>
 
     <label class="row"><input id="show-skyline" type="checkbox"> קו רכס צהוב</label>
-    <small>הקו הוא קו האופק כפי שהוא מחושב מהמפה הטופוגרפית. אם הוא יושב על הרכס האמיתי, הכיוון מכויל. אם לא, גרור את המסך עד שהוא יושב עליו.</small>
+    <small>קו האופק כפי שהוא מחושב מהמפה הטופוגרפית. אם הוא יושב על הרכס האמיתי, השמות במקום. אם לא: קודם 🎯, ואם זה לא עוזר, לגרור את המסך עד שהקו על הרכס. ⟲ מבטל.</small>
 
     <label class="row"><input id="show-hidden" type="checkbox"> גם מקומות מוסתרים</label>
     <small>מקומות שנמצאים מאחורי הר ולא נראים מכאן יוצגו בשקיפות.</small>
@@ -88,14 +93,14 @@
       <summary>מתקדם</summary>
       <label>שדה ראייה של המצלמה: <output id="fov-out"></output>°
         <input id="fov" type="range" min="40" max="100" step="1">
-        <small>לשנות רק אם אחרי כיול הקו הצהוב יושב על הרכס במרכז המסך אבל מתרחק ממנו בקצוות. אם בקצוות הקו "מתפרש" רחב מדי, להגדיל; אם צר מדי, להקטין.</small>
+        <small>כמעט אף פעם לא צריך לשנות. רק אם אחרי כיול הקו הצהוב יושב על הרכס במרכז המסך אבל מתרחק ממנו בקצוות: אם ההרים על הקו מרוחקים זה מזה יותר מבמציאות, להגדיל; אם צפופים יותר, להקטין.</small>
       </label>
       <button id="btn-refresh" class="secondary">משיכת מקומות מהשרת (אם חסר משהו)</button>
       <p id="debug" class="credit"></p>
     </details>
 
     <button id="btn-capture" class="secondary">📸 שמור לבדיקה (כשהכיול טועה)</button>
-    <small>שומר את תמונת המצלמה עם נתוני החיישנים, ופותח את תיבת הבדיקות שלך ב-claude.ai כדי להעלות אותה ל-Claude.</small>
+    <small>כשהשמות או הקו הצהוב במקום הלא נכון: שומר את תמונת המצלמה עם נתוני החיישנים, ואז מציע לפתוח את תיבת הבדיקות שלך ב-claude.ai כדי להעלות אותה ל-Claude.</small>
     <button id="btn-help" class="secondary">הסבר ועזרה</button>
     <button id="btn-close-settings" class="primary">סגור</button>
   </section>
@@ -106,6 +111,19 @@
     <p>עכשיו פתח את תיבת הבדיקות, לחץ "בחר קובץ" ובחר אותו. אם תרצה, כתוב שם במשפט מה היה לא בסדר.</p>
     <button id="btn-open-inbox" class="primary">פתח את תיבת הבדיקות</button>
     <button id="btn-close-sent" class="secondary">אחר כך</button>
+  </section>
+
+  <section id="compass-panel" class="panel" hidden>
+    <h2>המצפן של הטלפון כנראה לא מכויל</h2>
+    <p>לפי הרכס שבתמונה, הכיוון שהטלפון מדווח שגוי בכ-<b id="compass-off"></b>°. האפליקציה כבר תיקנה את זה בשבילך כאן, אבל המצפן ימשיך לטעות גם במקומות אחרים ובאפליקציות אחרות.</p>
+    <p><b>איך מכיילים</b> (חצי דקה):</p>
+    <ol class="steps">
+      <li>להתרחק כמה מטרים ממכונית, מגדר מתכת או מקיר עם ברזל.</li>
+      <li>להחזיק את הטלפון ולצייר איתו באוויר את הספרה 8 בגדול, תוך כדי סיבוב פרק כף היד לכל הכיוונים, כ-10 פעמים.</li>
+      <li>ללחוץ "כיילתי". האפליקציה תתחיל מחדש עם המצפן, ואז אפשר ללחוץ 🎯 כדי לבדוק.</li>
+    </ol>
+    <button id="btn-compass-done" class="primary">כיילתי</button>
+    <button id="btn-compass-ok" class="secondary">לא עכשיו</button>
   </section>
 
   <section id="info" class="panel" hidden>

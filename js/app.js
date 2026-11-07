@@ -7,7 +7,7 @@ import { loadLandmarks, loadRoads, finalizeScores, KIND_HE } from './data.js';
 import { Orientation } from './orientation.js';
 import { REGIONS } from './regions.js';
 
-const VERSION = '0.21';
+const VERSION = '0.23';
 const $ = (id) => document.getElementById(id);
 const video = $('video');
 const canvas = $('overlay');
@@ -861,6 +861,25 @@ function computeAlign({ rolls = [0], scales = [1], rangeX = 0.3, rangeY = 0.2, s
   best.horizontalReliable = best.score - bestAtZeroX > 0.15 * Math.max(1, best.score - med);
   best.f = f; best.H = H;
   best.offDeg = Math.hypot(best.sx, best.sy) / f * R2D + Math.abs(best.roll) * R2D * 0.3;
+  // Sanity check at the chosen position: above the line should look like sky (smooth and
+  // brighter than below). A ridge-shaped edge in a wall, a screen or a test pattern fails this.
+  {
+    const cr = Math.cos(best.roll), sr = Math.sin(best.roll);
+    let tA = 0, lA = 0, lB = 0, rA = 0, bA = 0, cnt = 0;
+    for (const [x, y] of pts) {
+      const X = Math.round(gx0 + best.scale * ((x - gx0) * cr - (y - gy0) * sr) + best.sx * k);
+      const Y = Math.round(gy0 + best.scale * ((x - gx0) * sr + (y - gy0) * cr) + best.sy * k);
+      if (X < 0 || X >= cw || Y < 12 || Y >= ch - 12) continue;
+      const ia = ((Y - 6) * cw + X) * 4;
+      tA += T[(Y - 2) * cw + X]; lA += L[(Y - 6) * cw + X]; lB += L[(Y + 6) * cw + X];
+      rA += px[ia]; bA += px[ia + 2]; cnt++;
+    }
+    best.skyTexture = cnt ? tA / cnt : 99;
+    best.skyContrast = cnt ? (lA - lB) / cnt : 0;
+    best.skyLum = cnt ? lA / cnt : 0;
+    best.skyBlue = cnt ? (bA - rA) / cnt : 0; // daytime sky: blue, or neutral white/grey
+    best.skyLike = cnt > 10 && best.skyTexture < 14 && best.skyContrast > 8 && best.skyLum > 90 && best.skyBlue > -12;
+  }
   window.__lastAlign = best;
   return best;
 }
@@ -868,7 +887,7 @@ function computeAlign({ rolls = [0], scales = [1], rangeX = 0.3, rangeY = 0.2, s
 /** Calibration quality for the badge: is there a clear ridge, and how far is our line from it? */
 function updateCalibLevel(r) {
   let level = 'unknown';
-  if (!r.error && r.conf > 1.2) level = r.offDeg < 0.4 ? 'good' : r.offDeg < 1.2 ? 'fair' : 'bad';
+  if (!r.error && r.conf > 1.2 && r.skyLike) level = r.offDeg < 0.4 ? 'good' : r.offDeg < 1.2 ? 'fair' : 'bad';
   state.calib = { level, t: performance.now() };
 }
 
@@ -902,7 +921,7 @@ function autoAlign() {
   if (!r.error) { r.conf = coarse.conf; r.horizontalReliable = coarse.horizontalReliable; }
   updateCalibLevel(r);
   if (r.error) { say(r.error); return; }
-  if (r.conf < 1.2) { say('לא הצלחתי לזהות את קו הרכס בתמונה בביטחון. נסה לכוון לנוף פתוח, או גרור ידנית.'); return; }
+  if (r.conf < 1.2 || !r.skyLike) { say('לא מצאתי בתמונה רכס ברור מול שמיים, אז לא שיניתי כלום. כוון לנוף פתוח ונסה שוב, או גרור ידנית.', 5000); return; }
   applyAlign(r, 1, { allowScale: true });
   saveSettings();
   rememberCalibration();
@@ -922,9 +941,10 @@ function continuousAlignTick() {
   if (performance.now() - lastInteraction < 3000) return;
   const r = computeAlign({ rolls: [-1 * D2R, 0, 1 * D2R], scales: [1], rangeX: 0.12, rangeY: 0.1 });
   updateCalibLevel(r);
-  if (!settings.autoAlign || state.drive.active || r.error || r.conf < 2) return;
+  if (!settings.autoAlign || state.drive.active || r.error || r.conf < 2 || !r.skyLike) return;
   if (r.offDeg > 5) return; // too big to trust silently
   applyAlign(r, 0.5);
+  checkCompassHealth();
 }
 setInterval(continuousAlignTick, 2500);
 
@@ -938,6 +958,12 @@ function rememberCalibration() {
   m[placeKey(state.obs.lat, state.obs.lon)] = { h: settings.headingOffset, p: settings.pitchOffset, r: settings.rollOffset || 0, t: Date.now() };
   const keys = Object.keys(m);
   if (keys.length > 300) keys.sort((x, y) => m[x].t - m[y].t).slice(0, keys.length - 300).forEach((k) => delete m[k]);
+  try { localStorage.setItem(CALIB_KEY, JSON.stringify(m)); } catch { /* ignore */ }
+}
+function forgetCalibrationHere() {
+  if (!state.obs) return;
+  const m = loadCalibMap();
+  delete m[placeKey(state.obs.lat, state.obs.lon)];
   try { localStorage.setItem(CALIB_KEY, JSON.stringify(m)); } catch { /* ignore */ }
 }
 let lastPlace = null;
@@ -954,13 +980,17 @@ function recallCalibration(lat, lon) {
 }
 
 // ---------------- compass health ----------------
-// The web gives no compass-accuracy value on Android, but a large correction is a strong hint.
+// The web gives no compass-accuracy value on Android. But when the camera image (🎯 or the
+// continuous alignment) shows that the compass is off by a lot, it is almost always an
+// uncalibrated compass. Manual dragging is not evidence (you may just be exploring).
 let compassWarned = false;
-function checkCompassHealth() {
-  if (compassWarned || state.drive.active) return;
-  if (Math.abs(wrapPi(settings.headingOffset)) > 15 * D2R) {
+function checkCompassHealth(fromImage = true) {
+  if (!fromImage || compassWarned || state.drive.active) return;
+  const off = Math.abs(wrapPi(settings.headingOffset)) * R2D;
+  if (off > 15) {
     compassWarned = true;
-    say('המצפן סוטה בהרבה מעלות. כדאי לכייל אותו: לנפנף את הטלפון כמה פעמים בצורת 8 באוויר, הרחק ממתכת ומרכב.', 9000);
+    $('compass-off').textContent = Math.round(off);
+    $('compass-panel').hidden = false;
   }
 }
 
@@ -1070,7 +1100,7 @@ function updateHud(q) {
   badge.textContent = { good: '✓ מכויל', fair: '≈ כמעט', bad: '✗ לא מכויל', unknown: '' }[lvl];
   const parts = [state.night ? '🌙 מצב לילה' : '', state.drive.active ? '🚗 כיוון לפי נסיעה' : '', s.gps, s.data || (state.pois.length ? `${state.pois.length} מקומות` : ''), s.dem].filter(Boolean);
   $('status').textContent = parts.join(' · ');
-  $('zoom-label').textContent = state.zoom > 1.05 ? `×${state.zoom.toFixed(1)}` : '';
+  $('zoom-label').textContent = state.zoom > 1.05 ? `×${state.zoom.toFixed(1)} ✕` : '';
 }
 
 // ---------------- gestures ----------------
@@ -1110,6 +1140,7 @@ canvas.addEventListener('pointermove', (e) => {
     } else {
       settings.headingOffset += dx / f;
       settings.pitchOffset += dy / state.zoom;
+      say(`כיול ידני: ${(wrapPi(settings.headingOffset) * R2D).toFixed(1)}° · ⟲ מחזיר למצב רגיל`, 2500);
     }
   }
 });
@@ -1119,7 +1150,7 @@ function endPointer(e) {
   pointers.delete(e.pointerId);
   if (gesture?.type === 'drag' && pointers.size === 0) {
     if (gesture.moved < 8) onTap(e.clientX, e.clientY);
-    else { orient.lock(); saveSettings(); rememberCalibration(); checkCompassHealth(); }
+    else if (state.mode === 'live') { orient.lock(); saveSettings(); rememberCalibration(); say('הכיול הידני נשמר למקום הזה. ⟲ מחזיר למצב רגיל.', 3500); }
   }
   if (pointers.size === 0) gesture = null;
   else if (pointers.size === 1) gesture = null; // finishing a pinch: don't turn the leftover finger into a drag
@@ -1127,6 +1158,18 @@ function endPointer(e) {
 canvas.addEventListener('pointerup', endPointer);
 canvas.addEventListener('pointercancel', endPointer);
 canvas.addEventListener('wheel', (e) => { e.preventDefault(); setZoom(state.zoom * Math.exp(-e.deltaY / 400)); }, { passive: false });
+
+/** ⟲: back to normal: no zoom, no calibration corrections, north from the compass again. */
+function resetToNormal() {
+  setZoom(1);
+  settings.headingOffset = 0; settings.pitchOffset = 0; settings.rollOffset = 0;
+  saveSettings();
+  forgetCalibrationHere();
+  orient.unlock();
+  compassWarned = false;
+  state.calib = null;
+  say('חזרנו למצב רגיל: בלי זום, בלי תיקוני כיול, והכיוון נלקח שוב מהמצפן.', 4000);
+}
 
 function setZoom(z) {
   state.zoom = Math.max(1, Math.min(8, z));
@@ -1258,12 +1301,10 @@ function bindSettings() {
   };
   $('btn-close-settings').onclick = () => { $('settings').hidden = true; };
   $('btn-refresh').onclick = () => { $('settings').hidden = true; if (state.obs) loadAll(true); };
-  $('btn-calib').onclick = () => {
-    settings.headingOffset = 0; settings.pitchOffset = 0; settings.rollOffset = 0; saveSettings();
-    const hint = $('calib-hint');
-    hint.hidden = false;
-    setTimeout(() => { hint.hidden = true; }, 4000);
-  };
+  $('btn-calib').onclick = resetToNormal;
+  $('zoom-label').onclick = () => setZoom(1);
+  $('btn-compass-ok').onclick = () => { $('compass-panel').hidden = true; };
+  $('btn-compass-done').onclick = () => { $('compass-panel').hidden = true; resetToNormal(); };
 }
 
 // ---------------- start ----------------

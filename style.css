@@ -34,11 +34,15 @@ html, body {
   position: fixed; bottom: calc(8px + env(safe-area-inset-bottom, 0)); inset-inline-start: 10px; z-index: 2;
   display: flex; gap: 8px; align-items: center;
 }
-#toolbar button {
-  width: 42px; height: 42px; border-radius: 50%; border: 0; font-size: 19px;
+#toolbar button.tool {
+  width: 46px; height: 46px; border-radius: 14px; border: 0; padding: 0;
   background: rgba(0,0,0,.55); color: var(--text);
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px;
 }
-#zoom-label { font-size: 13px; color: var(--muted); text-shadow: 0 1px 2px #000; }
+#toolbar button.tool span { font-size: 18px; line-height: 1; }
+#toolbar button.tool small { font-size: 10px; line-height: 1; color: var(--muted); }
+#zoom-label { border: 0; border-radius: 12px; padding: 6px 10px; font-size: 13px; font-weight: 700; background: rgba(0,0,0,.55); color: var(--text); }
+#zoom-label:empty { display: none; }
 
 #calib-hint {
   position: fixed; bottom: 72px; inset-inline: 16px; z-index: 2; text-align: center;
@@ -89,3 +93,6 @@ button.secondary { background: rgba(255,255,255,.12); color: var(--text); }
 .panel .sub label { margin: 8px 0; }
 .panel small.inline { display: inline; margin: 0; }
 .panel select { font: inherit; margin-inline-start: 6px; padding: 4px 8px; border-radius: 8px; background: rgba(255,255,255,.12); color: var(--text); border: 0; }
+.panel ol.steps { padding-inline-start: 20px; line-height: 1.6; font-size: 14px; }
+.panel ol.steps li { margin-bottom: 6px; }
+.tips b { color: var(--text); }

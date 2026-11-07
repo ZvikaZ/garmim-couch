@@ -7,7 +7,7 @@ import { loadLandmarks, loadRoads, finalizeScores, KIND_HE } from './data.js';
 import { Orientation } from './orientation.js';
 import { REGIONS } from './regions.js';
 
-const VERSION = '0.18';
+const VERSION = '0.19';
 const $ = (id) => document.getElementById(id);
 const video = $('video');
 const canvas = $('overlay');
@@ -321,8 +321,7 @@ function render() {
     ctx.globalAlpha = 1;
   }
   if (settings.showRoads) drawRoads(project, W, H, overlaps);
-  if (settings.showCompass) drawCompass(project, W, H);
-  if (settings.showPrayer) drawPrayer(q, project, W, H);
+  drawBottomBar(q, project, W, H);
   drawReticle(q, f, W, H, cx, cy);
   drawRivers(project, W, H, overlaps);
   updateHud(q);
@@ -369,87 +368,94 @@ function drawRoads(project, W, H, overlaps) {
   }
 }
 
-// ---------------- compass points ----------------
-// A compass tape near the bottom of the screen: each tick sits at the screen x of that
-// direction on the horizon. Ticks every 5°, longer every 15°, named every 45°.
+// ---------------- bottom bar: compass tape + prayer direction, beside the buttons ----------------
+// One row at the bottom: the buttons on one side, and in the rest of the row a compass tape
+// (each tick at the screen x of that direction on the horizon; names every 45°, degrees
+// every 15°, north in red) with the direction to Jerusalem / the Temple Mount marked in gold.
 const WINDS = ['צפון', 'צפון-מזרח', 'מזרח', 'דרום-מזרח', 'דרום', 'דרום-מערב', 'מערב', 'צפון-מערב'];
-function drawCompass(project, W, H) {
-  const y = H - 96;
+const TEMPLE_MOUNT = { lat: 31.77806, lon: 35.23536 };
+const GOLD = '#ffcf4a';
+
+function drawBottomBar(q, project, W, H) {
+  if (!settings.showCompass && !settings.showPrayer) return;
+  const tb = $('toolbar').getBoundingClientRect();
+  const y = tb.height ? tb.top + tb.height / 2 + 4 : H - 30;    // baseline of the tape
+  // the free part of the row (the toolbar sits on one side)
+  const x0 = tb.width && tb.left < W / 2 ? tb.right + 8 : 0;
+  const x1 = tb.width && tb.left >= W / 2 ? tb.left - 8 : W;
   ctx.save();
-  const band = ctx.createLinearGradient(0, y - 30, 0, y + 12);
-  band.addColorStop(0, 'rgba(0,0,0,0)'); band.addColorStop(1, 'rgba(0,0,0,0.35)');
-  ctx.fillStyle = band; ctx.fillRect(0, y - 30, W, 42);
-  ctx.strokeStyle = 'rgba(255,255,255,0.7)';
-  ctx.lineWidth = 1;
-  for (let deg = 0; deg < 360; deg += 5) {
-    const pt = project(dirVector(deg * D2R, 0));
-    if (!pt || pt[0] < -40 || pt[0] > W + 40) continue;
-    const x = pt[0];
-    const major = deg % 45 === 0, mid = deg % 15 === 0;
-    const len = major ? 12 : mid ? 7 : 4;
-    ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x, y - len); ctx.stroke();
-    if (major) {
-      ctx.font = '700 13px system-ui, sans-serif';
-      ctx.fillStyle = deg === 0 ? '#ff8a7a' : '#ffffff'; // north in red, like a compass needle
-      ctx.fillText(WINDS[deg / 45], x, y - 16);
-    } else if (mid) {
-      ctx.font = '500 10px system-ui, sans-serif';
-      ctx.fillStyle = 'rgba(255,255,255,0.75)';
-      ctx.fillText(`${deg}°`, x, y - 12);
+  ctx.fillStyle = 'rgba(0,0,0,0.38)';
+  roundRect(ctx, x0, y - 26, x1 - x0, 34, 10); ctx.fill();
+  ctx.beginPath(); ctx.rect(x0, y - 30, x1 - x0, 40); ctx.clip();
+  if (settings.showCompass) {
+    ctx.strokeStyle = 'rgba(255,255,255,0.7)';
+    ctx.lineWidth = 1;
+    for (let deg = 0; deg < 360; deg += 5) {
+      const pt = project(dirVector(deg * D2R, 0));
+      if (!pt || pt[0] < x0 - 40 || pt[0] > x1 + 40) continue;
+      const x = pt[0];
+      const major = deg % 45 === 0, mid = deg % 15 === 0;
+      const len = major ? 9 : mid ? 6 : 3;
+      ctx.beginPath(); ctx.moveTo(x, y + 6); ctx.lineTo(x, y + 6 - len); ctx.stroke();
+      if (major) {
+        ctx.font = '700 12px system-ui, sans-serif';
+        ctx.fillStyle = deg === 0 ? '#ff8a7a' : '#ffffff';
+        ctx.fillText(WINDS[deg / 45], x, y - 9);
+      } else if (mid) {
+        ctx.font = '500 10px system-ui, sans-serif';
+        ctx.fillStyle = 'rgba(255,255,255,0.7)';
+        ctx.fillText(`${deg}°`, x, y - 9);
+      }
     }
   }
   ctx.restore();
+  if (settings.showPrayer) drawPrayer(q, project, x0, x1, y);
 }
 
-// ---------------- prayer direction (Jerusalem, the Temple Mount) ----------------
-const TEMPLE_MOUNT = { lat: 31.77806, lon: 35.23536 };
-function drawPrayer(q, project, W, H) {
+/** Prayer direction on the bottom bar: a gold marker at its x, or an arrow at the bar's end. */
+function drawPrayer(q, project, x0, x1, y) {
   const { d, brg } = distBearing(state.obs.lat, state.obs.lon, TEMPLE_MOUNT.lat, TEMPLE_MOUNT.lon);
   if (d < 150) return;
-  // In and around Jerusalem the direction is to the Temple Mount itself.
-  const name = d < 25000 ? 'הר הבית' : 'ירושלים';
-  const gold = '#ffcf4a';
-  // Close enough to really see it? Then it is also a place on the landscape.
-  let seenAt = null;
+  const name = d < 25000 ? 'הר הבית' : 'ירושלים'; // in and around Jerusalem: the Temple Mount itself
+  // Close enough to really see it? Then mark its actual spot in the view too.
   if (d < 8000 && state.dem.ready) {
     const g = state.dem.elevation(TEMPLE_MOUNT.lat, TEMPLE_MOUNT.lon);
     const h = (Number.isNaN(g) ? 740 : g) + 20;
-    if (lineOfSight(state.dem, state.obs, TEMPLE_MOUNT, h, d, brg).clearance > -0.003) seenAt = project(dirVector(brg, elevationAngle(h - state.obs.h, d)));
+    if (lineOfSight(state.dem, state.obs, TEMPLE_MOUNT, h, d, brg).clearance > -0.003) {
+      const sp = project(dirVector(brg, elevationAngle(h - state.obs.h, d)));
+      if (sp) {
+        ctx.fillStyle = GOLD; ctx.beginPath(); ctx.arc(sp[0], sp[1], 5, 0, Math.PI * 2); ctx.fill();
+        ctx.font = '700 13px system-ui, sans-serif';
+        ctx.fillText(name, sp[0], sp[1] - 10);
+      }
+    }
   }
   const pt = project(dirVector(brg, 0));
-  ctx.font = '700 14px system-ui, sans-serif';
-  if (pt && pt[0] > 10 && pt[0] < W - 10) {
-    const x = pt[0];
-    // A direction, not a thing you see: a dashed line through the whole view,
-    // and an outlined (not filled) chip at the bottom.
-    ctx.save();
-    ctx.strokeStyle = 'rgba(255, 207, 74, 0.8)'; ctx.lineWidth = 2; ctx.setLineDash([3, 9]);
-    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
-    ctx.restore();
-    if (seenAt) {
-      ctx.fillStyle = gold; ctx.beginPath(); ctx.arc(seenAt[0], seenAt[1], 5, 0, Math.PI * 2); ctx.fill();
-      ctx.strokeStyle = '#000'; ctx.lineWidth = 1; ctx.stroke();
-    }
-    const label = `🧭 כיוון תפילה · ${name} ${fmtKm(d)} ק״מ${seenAt ? ' · נראה מכאן' : ''}`;
-    const w = ctx.measureText(label).width + 20;
-    const bx = Math.max(4, Math.min(W - w - 4, x - w / 2)), by = H - 168;
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.35)'; roundRect(ctx, bx, by, w, 28, 14); ctx.fill();
-    ctx.strokeStyle = gold; ctx.lineWidth = 1.5; ctx.setLineDash([]); roundRect(ctx, bx, by, w, 28, 14); ctx.stroke();
-    ctx.fillStyle = gold; ctx.fillText(label, bx + w / 2, by + 19);
+  ctx.font = '700 12px system-ui, sans-serif';
+  const chip = (txt, cx) => {
+    const w = ctx.measureText(txt).width + 14;
+    const bx = Math.max(x0 + 2, Math.min(x1 - w - 2, cx - w / 2));
+    // floats just above the bar, so it never hides the compass names
+    const by = y - 50;
+    ctx.fillStyle = 'rgba(40, 28, 0, 0.85)'; roundRect(ctx, bx, by, w, 20, 10); ctx.fill();
+    ctx.strokeStyle = GOLD; ctx.lineWidth = 1.2; roundRect(ctx, bx, by, w, 20, 10); ctx.stroke();
+    ctx.fillStyle = GOLD; ctx.fillText(txt, bx + w / 2, by + 14);
+  };
+  if (pt && pt[0] > x0 + 4 && pt[0] < x1 - 4) {
+    // gold notch on the tape, label just above it (a direction, not a visible place)
+    ctx.fillStyle = GOLD;
+    ctx.beginPath(); ctx.moveTo(pt[0], y - 2); ctx.lineTo(pt[0] - 6, y + 8); ctx.lineTo(pt[0] + 6, y + 8); ctx.closePath(); ctx.fill();
+    ctx.strokeStyle = GOLD; ctx.lineWidth = 1; ctx.setLineDash([2, 3]);
+    ctx.beginPath(); ctx.moveTo(pt[0], y - 30); ctx.lineTo(pt[0], y - 2); ctx.stroke(); ctx.setLineDash([]);
+    chip(`🧭 ${name} ${fmtKm(d)} ק״מ`, pt[0]);
     return;
   }
-  // off screen: an arrow on the side to turn towards
-  const { heading } = cameraHeadingPitch(q);
-  const rel = wrapPi(brg - heading);
-  const left = rel < 0;
-  // canvas text is right-to-left: the start of the string is drawn on the right
+  // off screen: an arrow at the end of the bar towards which to turn
+  const rel = wrapPi(brg - cameraHeadingPitch(q).heading);
   const deg = Math.round(Math.abs(rel) * R2D);
-  const txt = left ? `🧭 ${name} ${deg}° ◀` : `▶ ${name} ${deg}° 🧭`;
-  const w = ctx.measureText(txt).width + 20;
-  const bx = left ? 8 : W - w - 8, by = H / 2 - 74;
-  ctx.fillStyle = 'rgba(0, 0, 0, 0.35)'; roundRect(ctx, bx, by, w, 28, 14); ctx.fill();
-  ctx.strokeStyle = gold; ctx.lineWidth = 1.5; roundRect(ctx, bx, by, w, 28, 14); ctx.stroke();
-  ctx.fillStyle = gold; ctx.fillText(txt, bx + w / 2, by + 19);
+  // canvas text is right-to-left: the start of the string is drawn on the right
+  if (rel < 0) chip(`🧭 ${name} ${deg}° ◀`, x0);
+  else chip(`▶ ${name} ${deg}° 🧭`, x1);
 }
 
 // ---------------- "what's in the middle?" ----------------

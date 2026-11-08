@@ -7,7 +7,7 @@ import { loadLandmarks, loadRoads, finalizeScores, KIND_HE } from './data.js';
 import { Orientation } from './orientation.js';
 import { REGIONS } from './regions.js';
 
-const VERSION = '0.29';
+const VERSION = '0.30';
 const $ = (id) => document.getElementById(id);
 const video = $('video');
 const canvas = $('overlay');
@@ -354,13 +354,43 @@ const KIND_STYLE = {
   water: { color: '#5fd1ff', size: 15, weight: 700 },
   valley: { color: '#b8f28c', size: 15, weight: 700 },
   region: { color: '#b8f28c', size: 16, weight: 800 },
-  viewpoint: { color: '#ffffff', size: 12, weight: 600 },
+  viewpoint: { color: '#ffb3d1', size: 12, weight: 600 },
   castle: { color: '#e9c8ff', size: 14, weight: 700 },
   fort: { color: '#e9c8ff', size: 14, weight: 700 },
   archaeological_site: { color: '#e9c8ff', size: 13, weight: 600 },
   ruins: { color: '#e9c8ff', size: 12, weight: 500 },
-  junction: { color: '#ffe9a8', size: 12, weight: 600 },
+  junction: { color: '#c9d1d9', size: 12, weight: 600 },
 };
+
+// Legend for the help screen and settings, built from the same colours the labels use.
+const LEGEND = [
+  ['city', 'עיר / עיירה (שם מודגש)'], ['village', 'יישוב, קיבוץ, מושב'], ['peak', 'הר או פסגה (עם הגובה)'],
+  ['volcano', 'הר געש כבוי'], ['water', 'אגם, מאגר, ים'], ['region', 'אזור או עמק'], ['castle', 'מבצר, אתר עתיקות, חורבה'],
+  ['viewpoint', 'מצפור'], ['junction', 'צומת או מחלף'],
+];
+function buildLegends() {
+  for (const el of document.querySelectorAll('.legend')) {
+    el.textContent = '';
+    for (const [kind, text] of LEGEND) {
+      const st = KIND_STYLE[kind];
+      const row = document.createElement('li');
+      const sw = document.createElement('span'); sw.className = 'lg-label'; sw.textContent = 'אבג'; sw.style.color = st.color;
+      sw.style.fontWeight = st.weight;
+      row.append(sw, document.createTextNode(text));
+      el.append(row);
+    }
+    const extra = [
+      ['lg-river', '〰 נחל', 'נחל או נהר (עם המרחק)'], ['lg-road', '90', 'מספר כביש'],
+      ['lg-gold', '🧭 ירושלים', 'כיוון תפילה (כיוון, לא משהו שרואים)'], ['lg-dim', 'אבג', 'שקוף: מוסתר מאחורי הר (אם הופעל בהגדרות)'],
+    ];
+    for (const [cls, sample, text] of extra) {
+      const row = document.createElement('li');
+      const sw = document.createElement('span'); sw.className = `lg-label ${cls}`; sw.textContent = sample;
+      row.append(sw, document.createTextNode(text));
+      el.append(row);
+    }
+  }
+}
 
 function resize() {
   const dpr = window.devicePixelRatio || 1;
@@ -1502,6 +1532,7 @@ function startDemo(params) {
 }
 
 bindSettings();
+buildLegends();
 // Intro: shown on the first run only; afterwards start straight away. Help is in settings.
 const INTRO_KEY = 'ma-roim:intro-seen';
 const introSeen = (() => { try { return localStorage.getItem(INTRO_KEY) === '1'; } catch { return false; } })();

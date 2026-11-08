@@ -104,3 +104,11 @@ button.secondary { background: rgba(255,255,255,.12); color: var(--text); }
 .u-good { background: #1f8a4c; color: #fff; }
 .u-fair { background: #b8860b; color: #fff; }
 .u-bad { background: #b3261e; color: #fff; }
+.lg-title { font-size: 17px; margin: 14px 0 6px; }
+.legend { list-style: none; padding: 0; margin: 6px 0; display: grid; gap: 6px; font-size: 13px; color: var(--muted); }
+.legend li { display: flex; align-items: center; gap: 10px; }
+.lg-label { display: inline-block; min-width: 72px; text-align: center; padding: 2px 8px; border-radius: 7px; background: rgba(0,0,0,.5); font-size: 14px; }
+.lg-river { color: #7fd8ff; font-style: italic; background: rgba(0,30,60,.6); }
+.lg-road { color: #1a3a6b; background: #fff; border: 2px solid #1a3a6b; font-weight: 700; min-width: 40px; }
+.lg-gold { color: #ffcf4a; border: 1.5px solid #ffcf4a; border-radius: 12px; background: rgba(0,0,0,.35); font-weight: 700; }
+.lg-dim { color: #bfe6ff; opacity: .45; }

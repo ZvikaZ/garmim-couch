@@ -7,7 +7,7 @@ import { loadLandmarks, loadRoads, finalizeScores, KIND_HE } from './data.js';
 import { Orientation } from './orientation.js';
 import { REGIONS } from './regions.js';
 
-const VERSION = '0.30';
+const VERSION = '0.31';
 const $ = (id) => document.getElementById(id);
 const video = $('video');
 const canvas = $('overlay');
@@ -344,29 +344,34 @@ function currentQuat() {
 }
 
 // ---------------- rendering ----------------
+// Four colour groups only: settlements (white; bigger and bolder = bigger place), mountains
+// (yellow), water (light blue: lakes and streams), and everything else (lilac: regions,
+// historic sites, viewpoints, junctions). Size and weight carry the importance.
+const C_SETTLE = '#ffffff', C_MOUNT = '#ffd34d', C_WATER = '#6fd3ff', C_OTHER = '#d9c2ff';
 const KIND_STYLE = {
-  city: { color: '#ffffff', size: 17, weight: 800 },
-  town: { color: '#ffffff', size: 15, weight: 700 },
-  village: { color: '#bfe6ff', size: 13, weight: 600 },
-  hamlet: { color: '#bfe6ff', size: 12, weight: 500 },
-  peak: { color: '#ffd34d', size: 15, weight: 700 },
-  volcano: { color: '#ffb36b', size: 15, weight: 700 },
-  water: { color: '#5fd1ff', size: 15, weight: 700 },
-  valley: { color: '#b8f28c', size: 15, weight: 700 },
-  region: { color: '#b8f28c', size: 16, weight: 800 },
-  viewpoint: { color: '#ffb3d1', size: 12, weight: 600 },
-  castle: { color: '#e9c8ff', size: 14, weight: 700 },
-  fort: { color: '#e9c8ff', size: 14, weight: 700 },
-  archaeological_site: { color: '#e9c8ff', size: 13, weight: 600 },
-  ruins: { color: '#e9c8ff', size: 12, weight: 500 },
-  junction: { color: '#c9d1d9', size: 12, weight: 600 },
+  city: { color: C_SETTLE, size: 17, weight: 800 },
+  town: { color: C_SETTLE, size: 15, weight: 700 },
+  village: { color: C_SETTLE, size: 13, weight: 500 },
+  hamlet: { color: C_SETTLE, size: 12, weight: 400 },
+  peak: { color: C_MOUNT, size: 15, weight: 700 },
+  volcano: { color: C_MOUNT, size: 15, weight: 700 },
+  water: { color: C_WATER, size: 15, weight: 700 },
+  valley: { color: C_OTHER, size: 15, weight: 700 },
+  region: { color: C_OTHER, size: 16, weight: 800 },
+  viewpoint: { color: C_OTHER, size: 12, weight: 500 },
+  castle: { color: C_OTHER, size: 14, weight: 700 },
+  fort: { color: C_OTHER, size: 14, weight: 700 },
+  archaeological_site: { color: C_OTHER, size: 13, weight: 600 },
+  ruins: { color: C_OTHER, size: 12, weight: 500 },
+  junction: { color: C_OTHER, size: 12, weight: 500 },
 };
 
 // Legend for the help screen and settings, built from the same colours the labels use.
 const LEGEND = [
-  ['city', 'עיר / עיירה (שם מודגש)'], ['village', 'יישוב, קיבוץ, מושב'], ['peak', 'הר או פסגה (עם הגובה)'],
-  ['volcano', 'הר געש כבוי'], ['water', 'אגם, מאגר, ים'], ['region', 'אזור או עמק'], ['castle', 'מבצר, אתר עתיקות, חורבה'],
-  ['viewpoint', 'מצפור'], ['junction', 'צומת או מחלף'],
+  ['city', 'יישובים: עיר, עיירה, קיבוץ, מושב. גדול ומודגש יותר = יישוב גדול יותר'],
+  ['peak', 'הרים ופסגות (עם הגובה)'],
+  ['water', 'מים: אגמים, מאגרים, ים'],
+  ['region', 'כל השאר: אזורים ועמקים, מבצרים ועתיקות, מצפורים, צמתים'],
 ];
 function buildLegends() {
   for (const el of document.querySelectorAll('.legend')) {
@@ -380,7 +385,7 @@ function buildLegends() {
       el.append(row);
     }
     const extra = [
-      ['lg-river', '〰 נחל', 'נחל או נהר (עם המרחק)'], ['lg-road', '90', 'מספר כביש'],
+      ['lg-river', '〰 נחל', 'נחלים (באותו צבע של המים, עם המרחק)'], ['lg-road', '90', 'מספר כביש'],
       ['lg-gold', '🧭 ירושלים', 'כיוון תפילה (כיוון, לא משהו שרואים)'], ['lg-dim', 'אבג', 'שקוף: מוסתר מאחורי הר (אם הופעל בהגדרות)'],
     ];
     for (const [cls, sample, text] of extra) {
@@ -738,7 +743,7 @@ function drawRivers(project, W, H, overlaps) {
     n++;
     ctx.fillStyle = 'rgba(0,30,60,0.6)';
     roundRect(ctx, box.x, box.y, box.w, box.h, 6); ctx.fill();
-    ctx.fillStyle = '#7fd8ff';
+    ctx.fillStyle = C_WATER;
     ctx.fillText(text, box.x + box.w / 2, box.y + 15);
     ctx.beginPath(); ctx.arc(pt[0], pt[1], 2.5, 0, Math.PI * 2); ctx.fill();
   }

@@ -7,7 +7,7 @@ import { loadLandmarks, loadRoads, finalizeScores, KIND_HE } from './data.js';
 import { Orientation } from './orientation.js';
 import { REGIONS } from './regions.js';
 
-const VERSION = '0.31';
+const VERSION = '0.32';
 const $ = (id) => document.getElementById(id);
 const video = $('video');
 const canvas = $('overlay');
@@ -371,7 +371,7 @@ const LEGEND = [
   ['city', 'יישובים: עיר, עיירה, קיבוץ, מושב. גדול ומודגש יותר = יישוב גדול יותר'],
   ['peak', 'הרים ופסגות (עם הגובה)'],
   ['water', 'מים: אגמים, מאגרים, ים'],
-  ['region', 'כל השאר: אזורים ועמקים, מבצרים ועתיקות, מצפורים, צמתים'],
+  ['region', 'כל השאר: אזורים ועמקים, מבצרים ועתיקות, מצפורים'],
 ];
 function buildLegends() {
   for (const el of document.querySelectorAll('.legend')) {
@@ -385,7 +385,7 @@ function buildLegends() {
       el.append(row);
     }
     const extra = [
-      ['lg-river', '〰 נחל', 'נחלים (באותו צבע של המים, עם המרחק)'], ['lg-road', '90', 'מספר כביש'],
+      ['lg-river', '〰 נחל', 'נחלים (באותו צבע של המים, עם המרחק)'], ['lg-road', '90', 'מספר כביש'], ['lg-road', 'צומת עמיעד', 'צומת או מחלף (שלט על המקום עצמו)'],
       ['lg-gold', '🧭 ירושלים', 'כיוון תפילה (כיוון, לא משהו שרואים)'], ['lg-dim', 'אבג', 'שקוף: מוסתר מאחורי הר (אם הופעל בהגדרות)'],
     ];
     for (const [cls, sample, text] of extra) {
@@ -450,7 +450,7 @@ function render() {
   const reach = 0.4 * state.zoom * settings.density; // km per score point
   const cands = [];
   for (const p of state.pois) {
-    if (p.d == null || p.isHere || p.d < (p.kind === 'region' ? 4000 : 150)) continue;
+    if (p.d == null || p.isHere || p.kind === 'junction' || p.d < (p.kind === 'region' ? 4000 : 150)) continue;
     if (!p.visible && !settings.showHidden) continue;
     if (p.d / 1000 > p.score * reach) continue;
     const pt = project(dirVector(p.brg, p.angle));
@@ -518,7 +518,7 @@ function render() {
     ctx.fillText(sub, box.x + box.w / 2, box.y + box.h - 4);
     ctx.globalAlpha = 1;
   }
-  if (settings.showRoads) drawRoads(project, W, H, overlaps);
+  if (settings.showRoads) { drawJunctions(project, W, H, overlaps); drawRoads(project, W, H, overlaps); }
   drawBottomBar(q, project, W, H);
   drawReticle(q, f, W, H, cx, cy);
   drawRivers(project, W, H, overlaps);
@@ -715,6 +715,34 @@ function drawReticle(q, f, W, H, cx, cy) {
   roundRect(ctx, x - w / 2, y + 22, w, 26, 13); ctx.fill();
   ctx.fillStyle = '#ffffff';
   ctx.fillText(centerInfo.text, x, y + 40);
+}
+
+/** Junctions as road signs, on the spot itself (like the road numbers), not as labels above. */
+function drawJunctions(project, W, H, overlaps) {
+  const reachM = 8000 * state.zoom * settings.density;
+  const list = state.pois.filter((p) => p.kind === 'junction' && p.d != null && p.d > 150 && p.d < reachM && p.visible)
+    .sort((a, b) => a.d - b.d);
+  const max = Math.round(4 * Math.sqrt(state.zoom) * settings.density);
+  let n = 0;
+  ctx.font = '700 12px system-ui, sans-serif';
+  for (const p of list) {
+    if (n >= max) break;
+    const pt = project(dirVector(p.brg, p.angle));
+    if (!pt || pt[0] < 20 || pt[0] > W - 20 || pt[1] < 60 || pt[1] > H - 110) continue;
+    const text = `${p.name} · ${fmtKm(p.d)}`;
+    const w = ctx.measureText(text).width + 14, h = 20;
+    const box = { x: Math.max(4, Math.min(W - w - 4, pt[0] - w / 2)), y: pt[1] - h - 6, w, h };
+    if (overlaps(box)) continue;
+    box.p = p;
+    state.placed.push(box);
+    n++;
+    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+    ctx.beginPath(); ctx.arc(pt[0], pt[1], 2.5, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#ffffff'; ctx.strokeStyle = '#1a3a6b'; ctx.lineWidth = 2;
+    roundRect(ctx, box.x, box.y, box.w, box.h, 5); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = '#1a3a6b';
+    ctx.fillText(text, box.x + box.w / 2, box.y + 15);
+  }
 }
 
 /** River names: one label per river, on its nearest visible stretch that is on screen. */

@@ -7,7 +7,7 @@ import { loadLandmarks, loadRoads, finalizeScores, KIND_HE } from './data.js';
 import { Orientation } from './orientation.js';
 import { REGIONS } from './regions.js';
 
-const VERSION = '0.32';
+const VERSION = '0.33';
 const $ = (id) => document.getElementById(id);
 const video = $('video');
 const canvas = $('overlay');
@@ -238,8 +238,7 @@ function spokenKm(m) {
 
 /** Is this a landmark worth announcing when it comes into view? */
 function isMajorLandmark(p) {
-  if (p.kind === 'city') return true;
-  if (p.kind === 'town') return (p.pop ?? 0) >= 10000;
+  // No towns or villages: their names are on every road sign. Only nature and history.
   if (p.kind === 'water') return (p.areaKm2 ?? 0) >= 2;
   if (p.kind === 'peak' || p.kind === 'volcano') return (p.ele ?? 0) >= 500 && (p.isoKm ?? 0) >= 8 && !!p.wikidata;
   if (p.kind === 'castle' || p.kind === 'fort') return !!p.wikidata;
